@@ -41,15 +41,18 @@ const (
 	// the ESP32. Keep a small, shared pacing interval for every capture source;
 	// without this guard a live FFmpeg pipe can flood UDP while the panel is
 	// still drawing the previous frame.
-	mirrorInterval          = 60 * time.Millisecond
+	// Experimental high-refresh profile: at most about 33 submitted frames/s.
+	// The receiver still keeps only the newest complete frame, so if the
+	// ESP32 cannot decode this quickly the sender drops stale work instead of
+	// building latency.
+	mirrorInterval          = 30 * time.Millisecond
 	mirrorHeartbeatInterval = 900 * time.Millisecond
 	mirrorKeyframeInterval  = 3 * time.Second
 	mirrorTileSize          = 32
 	mirrorTileMaxChunks     = 16
-	// A few changed tiles are already more expensive to decode than one
-	// complete 160x128 JPEG on the ESP32. Use tiles only for genuinely small
-	// UI updates; animated/full-screen changes take the direct full-frame path.
-	mirrorFullFrameTileLimit = 4
+	// TJpg_Decoder runs synchronously on the ESP32. Leave a small gap between
+	// tiles so a 20-tile keyframe does not overflow the UDP receive queue.
+	mirrorTileInterval = 8 * time.Millisecond
 )
 
 // Raw RGB565 avoids JPEG decode cost on the ESP32, but it sends a fixed 41KB
@@ -93,7 +96,7 @@ func startScreenCapture(ctx context.Context) (*screenCaptureStream, error) {
 		index = "3"
 	}
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error",
-		"-f", "avfoundation", "-framerate", "20", "-pixel_format", "uyvy422",
+		"-f", "avfoundation", "-framerate", "40", "-pixel_format", "uyvy422",
 		"-i", index+":none",
 		"-vf", "scale=160:128:force_original_aspect_ratio=increase,crop=160:128",
 		"-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1")
@@ -314,17 +317,17 @@ func encodeMirrorTile(canvas *image.RGBA, rect image.Rectangle) ([]byte, error) 
 	return append([]byte(nil), encoded.Bytes()...), nil
 }
 
-func sendMirrorTile(conn *net.UDPConn, address *net.UDPAddr, frameID uint16,
+func sendMirrorTile(conn *net.UDPConn, address *net.UDPAddr, frameID, tileIndex, tileCount uint16,
 	tile mirrorTilePayload, packet []byte) error {
 	jpegData := tile.data
 	chunks := (len(jpegData) + tileChunkPayload - 1) / tileChunkPayload
-	if chunks == 0 || chunks > mirrorTileMaxChunks || len(packet) < tileChunkPayload+18 {
+	if chunks == 0 || chunks > mirrorTileMaxChunks || tileCount == 0 || tileIndex >= tileCount || len(packet) < tileChunkPayload+22 {
 		return fmt.Errorf("镜像局部分块数量异常：%d", chunks)
 	}
 	for index := 0; index < chunks; index++ {
 		start := index * tileChunkPayload
 		end := min(start+tileChunkPayload, len(jpegData))
-		packet = packet[:18+end-start]
+		packet = packet[:22+end-start]
 		packet[0], packet[1], packet[2] = 'M', 'T', 1
 		binary.LittleEndian.PutUint16(packet[3:5], frameID)
 		packet[5], packet[6] = mirrorWidth, mirrorHeight
@@ -334,7 +337,9 @@ func sendMirrorTile(conn *net.UDPConn, address *net.UDPAddr, frameID uint16,
 		packet[13] = 1 // dirty-tile packet
 		packet[14], packet[15] = uint8(tile.rect.Min.X), uint8(tile.rect.Min.Y)
 		packet[16], packet[17] = uint8(tile.rect.Dx()), uint8(tile.rect.Dy())
-		copy(packet[18:], jpegData[start:end])
+		binary.LittleEndian.PutUint16(packet[18:20], tileIndex)
+		binary.LittleEndian.PutUint16(packet[20:22], tileCount)
+		copy(packet[22:], jpegData[start:end])
 		if _, err := conn.WriteToUDP(packet, address); err != nil {
 			return err
 		}
@@ -342,42 +347,50 @@ func sendMirrorTile(conn *net.UDPConn, address *net.UDPAddr, frameID uint16,
 	return nil
 }
 
-func (state *mirrorDeltaState) prepare(frame []byte, forceKeyframe bool) (bool, []mirrorTilePayload, error) {
+func (state *mirrorDeltaState) prepare(frame []byte, forceKeyframe bool) ([]mirrorTilePayload, error) {
 	hash := mirrorFrameHash(frame)
+	rects := mirrorTileRects()
 	if state.lastCanvas == nil {
 		canvas, err := decodeMirrorImage(frame)
 		if err != nil {
-			return true, nil, err
+			return nil, err
 		}
 		state.lastHash = hash
 		state.lastCanvas = canvas
-		rects := mirrorTileRects()
 		state.tileHashes = mirrorTileHashes(canvas, rects)
-		return true, nil, nil
+		// Even the first frame is sent as tiles. This avoids painting a whole
+		// 160x128 JPEG in one visible burst when entering mirror mode.
+		forceKeyframe = true
 	}
 	if !forceKeyframe && hash == state.lastHash {
-		return false, nil, nil
+		return nil, nil
 	}
-	canvas, err := decodeMirrorImage(frame)
-	if err != nil {
-		return true, nil, err
-	}
-	rects := mirrorTileRects()
-	hashes := mirrorTileHashes(canvas, rects)
-	changed := make([]int, 0, len(rects))
-	for index := range rects {
-		if index >= len(state.tileHashes) || hashes[index] != state.tileHashes[index] {
-			changed = append(changed, index)
+	canvas := state.lastCanvas
+	if hash != state.lastHash || state.lastCanvas == nil {
+		var err error
+		canvas, err = decodeMirrorImage(frame)
+		if err != nil {
+			return nil, err
 		}
 	}
-	// A tile update is useful only when it touches a small part of the panel.
-	// Full frames remain the recovery path for noisy or highly animated content.
-	if forceKeyframe || len(changed) == 0 || len(changed) >= mirrorFullFrameTileLimit ||
-		time.Since(state.lastKeyframe) >= mirrorKeyframeInterval {
+	hashes := mirrorTileHashes(canvas, rects)
+	changed := make([]int, 0, len(rects))
+	if forceKeyframe || len(state.tileHashes) == 0 {
+		for index := range rects {
+			changed = append(changed, index)
+		}
+	} else {
+		for index := range rects {
+			if index >= len(state.tileHashes) || hashes[index] != state.tileHashes[index] {
+				changed = append(changed, index)
+			}
+		}
+	}
+	if len(changed) == 0 {
 		state.lastHash = hash
 		state.lastCanvas = canvas
 		state.tileHashes = hashes
-		return true, nil, nil
+		return nil, nil
 	}
 	tiles := make([]mirrorTilePayload, 0, len(changed))
 	for _, index := range changed {
@@ -386,14 +399,43 @@ func (state *mirrorDeltaState) prepare(frame []byte, forceKeyframe bool) (bool, 
 			state.lastHash = hash
 			state.lastCanvas = canvas
 			state.tileHashes = hashes
-			return true, nil, nil
+			return nil, fmt.Errorf("镜像局部块编码失败")
 		}
 		tiles = append(tiles, mirrorTilePayload{rect: rects[index], data: data})
 	}
 	state.lastHash = hash
 	state.lastCanvas = canvas
 	state.tileHashes = hashes
-	return false, tiles, nil
+	return tiles, nil
+}
+
+func sendMirrorTiles(conn *net.UDPConn, address *net.UDPAddr, frameID *uint16,
+	tiles []mirrorTilePayload, packet []byte) error {
+	if len(tiles) == 0 || len(tiles) > 64 {
+		return nil
+	}
+	batchID := *frameID
+	tileCount := uint16(len(tiles))
+	for index, tile := range tiles {
+		if err := sendMirrorTile(conn, address, batchID, uint16(index), tileCount, tile, packet); err != nil {
+			return err
+		}
+		if index+1 < len(tiles) {
+			time.Sleep(mirrorTileInterval)
+		}
+	}
+	(*frameID)++
+	return nil
+}
+
+func heartbeatTile(canvas *image.RGBA) (mirrorTilePayload, error) {
+	const rectSize = 32
+	rect := image.Rect(0, 0, rectSize, rectSize)
+	data, err := encodeMirrorTile(canvas, rect)
+	if err != nil {
+		return mirrorTilePayload{}, err
+	}
+	return mirrorTilePayload{rect: rect, data: data}, nil
 }
 
 func (state *mirrorDeltaState) commitKeyframe(now time.Time) {
@@ -401,10 +443,14 @@ func (state *mirrorDeltaState) commitKeyframe(now time.Time) {
 }
 
 func waitMirrorInterval(ctx context.Context, lastSent time.Time) error {
+	return waitMirrorIntervalFor(ctx, lastSent, mirrorInterval)
+}
+
+func waitMirrorIntervalFor(ctx context.Context, lastSent time.Time, interval time.Duration) error {
 	if lastSent.IsZero() {
 		return nil
 	}
-	if wait := mirrorInterval - time.Since(lastSent); wait > 0 {
+	if wait := interval - time.Since(lastSent); wait > 0 {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		select {
@@ -414,6 +460,17 @@ func waitMirrorInterval(ctx context.Context, lastSent time.Time) error {
 		}
 	}
 	return nil
+}
+
+func mirrorBatchInterval(tileCount int) time.Duration {
+	if tileCount <= 1 {
+		return mirrorInterval
+	}
+	interval := time.Duration(tileCount) * 10 * time.Millisecond
+	if interval < mirrorInterval {
+		return mirrorInterval
+	}
+	return interval
 }
 
 func sendFrame(conn *net.UDPConn, address *net.UDPAddr, frameID uint16, jpegData []byte, packet []byte) error {
@@ -540,7 +597,7 @@ func mirrorLoop(ctx context.Context, deviceAddress string) error {
 		return captureFrame(ctx, capturePath)
 	}
 	frameID := uint16(0)
-	packet := make([]byte, chunkPayload+14)
+	packet := make([]byte, chunkPayload+22)
 	delta := mirrorDeltaState{}
 	// Send the first frame immediately so the device does not sit on the mirror placeholder.
 	frame, err := capture()
@@ -562,16 +619,10 @@ func mirrorLoop(ctx context.Context, deviceAddress string) error {
 	if err != nil {
 		return err
 	}
-	full, _, err := delta.prepare(frame, true)
-	if err != nil {
-		return err
-	}
-	if !full {
-		return fmt.Errorf("首帧没有生成完整关键帧")
-	}
 	if err := sendPreferredFullFrameCanvas(conn, address, frameID, frame, delta.lastCanvas, packet); err != nil {
 		return err
 	}
+	delta.lastHash = mirrorFrameHash(frame)
 	delta.commitKeyframe(time.Now())
 	frameID++
 	lastSentAt := time.Now()
@@ -600,36 +651,25 @@ func mirrorLoop(ctx context.Context, deviceAddress string) error {
 		if !changed && !heartbeat {
 			continue
 		}
-		if err := waitMirrorInterval(ctx, lastSentAt); err != nil {
-			return nil
-		}
-		forceKeyframe := time.Since(delta.lastKeyframe) >= mirrorKeyframeInterval
-		full, tiles, prepareErr := delta.prepare(frame, forceKeyframe)
-		if prepareErr != nil {
-			return prepareErr
-		}
-		if full {
-			if err := sendPreferredFullFrameCanvas(conn, address, frameID, frame, delta.lastCanvas, packet); err != nil {
+		if changed {
+			if err := waitMirrorInterval(ctx, lastSentAt); err != nil {
+				return nil
+			}
+			if err := sendPreferredFullFrame(conn, address, frameID, frame, packet); err != nil {
 				return err
 			}
-			delta.commitKeyframe(time.Now())
-		} else if len(tiles) > 0 {
-			for _, tile := range tiles {
-				if err := sendMirrorTile(conn, address, frameID, tile, packet); err != nil {
-					return err
-				}
-				frameID++
-			}
-		} else {
-			// An unchanged frame is a lightweight lease heartbeat. It is sent as
-			// a normal JPEG so older firmware and a receiver that just woke up can
-			// recover without knowing the tile history.
-			if err := sendFrame(conn, address, frameID, frame, packet); err != nil {
-				return err
-			}
-		}
-		if full || len(tiles) == 0 {
+			delta.lastHash = hash
 			frameID++
+		} else if heartbeat {
+			if err := waitMirrorIntervalFor(ctx, lastSentAt, mirrorBatchInterval(1)); err != nil {
+				return nil
+			}
+			if err := sendPreferredFullFrame(conn, address, frameID, frame, packet); err != nil {
+				return err
+			}
+			frameID++
+		} else {
+			continue
 		}
 		lastSentAt = time.Now()
 		lastHeartbeatAt = lastSentAt

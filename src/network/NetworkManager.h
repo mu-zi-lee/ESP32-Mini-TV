@@ -7,9 +7,12 @@
 
 namespace mini_tv {
 
+class MirrorReceiver;
+
 class NetworkManager {
  public:
   explicit NetworkManager(ModeManager& modes) : modes_(modes), server_(80) {}
+  void setMirrorReceiver(MirrorReceiver& mirror) { mirror_ = &mirror; }
   void begin();
   void handle();
   const char* modeName() const { return mini_tv::modeName(modes_.state().mode); }
@@ -36,6 +39,7 @@ class NetworkManager {
   String stationSsid_;
   String stationPassword_;
   uint32_t lastConnectAttempt_ = 0;
+  MirrorReceiver* mirror_ = nullptr;
 };
 
 }  // namespace mini_tv

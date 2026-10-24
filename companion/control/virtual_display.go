@@ -154,15 +154,32 @@ func dialUnix(path string) (io.ReadWriteCloser, error) {
 
 func (v *virtualDisplaySession) Stop() VirtualDisplayStatus {
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.cmd != nil && v.cmd.Process != nil {
-		_ = v.cmd.Process.Signal(os.Interrupt)
-		_ = v.cmd.Wait()
-	}
-	if v.socket != "" {
-		_ = os.Remove(v.socket)
-	}
+	cmd := v.cmd
+	socket := v.socket
+	// Clear the session before waiting for the helper. The helper can still
+	// emit a final frame while shutting down, and holding this mutex during
+	// Wait would block status/stop calls indefinitely on macOS versions where
+	// CGVirtualDisplay does not honor SIGINT promptly.
 	v.cmd, v.socket, v.displayID = nil, "", 0
+	v.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(os.Interrupt)
+		done := make(chan struct{})
+		go func() {
+			_ = cmd.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(1200 * time.Millisecond):
+			_ = cmd.Process.Kill()
+			<-done
+		}
+	}
+	if socket != "" {
+		_ = os.Remove(socket)
+	}
 	return VirtualDisplayStatus{Active: false, Width: 640, Height: 512, Mode: "未创建", Message: "虚拟屏幕已关闭"}
 }
 
@@ -266,7 +283,7 @@ func virtualMirrorLoop(ctx context.Context, deviceAddress string) error {
 		}
 	}()
 	frameID := uint16(0)
-	packet := make([]byte, chunkPayload+14)
+	packet := make([]byte, chunkPayload+22)
 	delta := mirrorDeltaState{}
 	var latest []byte
 	lastHeartbeatAt := time.Time{}
@@ -287,38 +304,18 @@ func virtualMirrorLoop(ctx context.Context, deviceAddress string) error {
 			if len(latest) == 0 {
 				continue
 			}
-			changed := delta.lastCanvas == nil || mirrorFrameHash(latest) != delta.lastHash
+			hash := mirrorFrameHash(latest)
+			changed := hash != delta.lastHash
 			heartbeat := lastHeartbeatAt.IsZero() || time.Since(lastHeartbeatAt) >= mirrorHeartbeatInterval
 			if !changed && !heartbeat {
 				continue
 			}
-			forceKeyframe := time.Since(delta.lastKeyframe) >= mirrorKeyframeInterval
-			full, tiles, prepareErr := delta.prepare(latest, forceKeyframe)
-			if prepareErr != nil {
-				log.Printf("virtual mirror: frame decode failed: %v", prepareErr)
-				return prepareErr
-			}
-			if full {
-				if err := sendPreferredFullFrame(conn, address, frameID, latest, packet); err != nil {
-					log.Printf("virtual mirror: udp send failed: %v", err)
-					return err
-				}
-				delta.commitKeyframe(time.Now())
-			} else if len(tiles) > 0 {
-				for _, tile := range tiles {
-					if err := sendMirrorTile(conn, address, frameID, tile, packet); err != nil {
-						log.Printf("virtual mirror: udp tile send failed: %v", err)
-						return err
-					}
-					frameID++
-				}
-			} else if err := sendFrame(conn, address, frameID, latest, packet); err != nil {
-				log.Printf("virtual mirror: udp heartbeat failed: %v", err)
+			if err := sendPreferredFullFrame(conn, address, frameID, latest, packet); err != nil {
+				log.Printf("virtual mirror: udp frame send failed: %v", err)
 				return err
 			}
-			if full || len(tiles) == 0 {
-				frameID++
-			}
+			delta.lastHash = hash
+			frameID++
 			lastHeartbeatAt = time.Now()
 		}
 	}

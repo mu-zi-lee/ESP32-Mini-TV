@@ -35,18 +35,18 @@ func TestMirrorDeltaUnchangedFrameProducesNoTiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := mirrorDeltaState{}
-	if full, tiles, err := state.prepare(first, true); err != nil || !full || len(tiles) != 0 {
-		t.Fatalf("first frame: full=%v tiles=%d err=%v", full, len(tiles), err)
+	if tiles, err := state.prepare(first, true); err != nil || len(tiles) != len(mirrorTileRects()) {
+		t.Fatalf("first frame: tiles=%d err=%v", len(tiles), err)
 	}
 	second, err := encodeMirrorJPEG(canvas)
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, tiles, err := state.prepare(second, false)
+	tiles, err := state.prepare(second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if full || len(tiles) != 0 {
-		t.Fatalf("unchanged frame: full=%v tiles=%d", full, len(tiles))
+	if len(tiles) != 0 {
+		t.Fatalf("unchanged frame: tiles=%d", len(tiles))
 	}
 }

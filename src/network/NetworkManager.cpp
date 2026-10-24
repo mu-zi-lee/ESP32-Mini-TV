@@ -3,6 +3,8 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 
+#include "MirrorReceiver.h"
+
 #if __has_include("wifi_config.h")
 #include "wifi_config.h"
 #endif
@@ -153,7 +155,11 @@ void NetworkManager::handleStatus() {
                       ",\"track\":\"" + jsonEscape(String(modes_.state().track)) +
                       "\",\"artist\":\"" + jsonEscape(String(modes_.state().artist)) + "\"" +
                       ",\"mirrorActive\":" + String(modes_.state().mirrorActive ? "true" : "false") +
-                      ",\"mirrorFrames\":" + String(modes_.state().mirrorFrames) + "}";
+                      ",\"mirrorFrames\":" + String(modes_.state().mirrorFrames) +
+                      ",\"mirrorUdpBound\":" + String(mirror_ && mirror_->udpBound() ? "true" : "false") +
+                      ",\"mirrorPackets\":" + String(mirror_ ? mirror_->packetsSeen() : 0) +
+                      ",\"mirrorRejected\":" + String(mirror_ ? mirror_->packetsRejected() : 0) +
+                      ",\"mirrorDecodeFailures\":" + String(mirror_ ? mirror_->framesFailed() : 0) + "}";
   sendJson(body);
 }
 

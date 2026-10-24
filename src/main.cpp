@@ -20,6 +20,7 @@ void setup() {
   display.begin();
   display.runHardwareSmokeTest();
   modes.begin();
+  network.setMirrorReceiver(mirror);
   network.begin();
   mirror.begin();
   Serial.println("Ready. Commands: home, mirror, music, dashboard, settings, error, next");
