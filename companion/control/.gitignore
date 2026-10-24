@@ -1,0 +1,13 @@
+node_modules/
+/dist/
+/build/
+/.mygo/
+.env
+resources/virtual-display-helper
+esp32-mini-tv-control
+.env.*
+!.env.example
+mygo_windows_*.syso
+
+# Local-only project notes; the root README remains the public documentation.
+*.md

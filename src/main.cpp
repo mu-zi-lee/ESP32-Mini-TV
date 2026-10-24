@@ -1,59 +1,55 @@
 #include <Arduino.h>
-#include <SPI.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
 
-#define TFT_CS 27
-#define TFT_DC 26
-#define TFT_RST 25
-#define TFT_SCLK 18
-#define TFT_MOSI 23
+#include "core/ModeManager.h"
+#include "network/MirrorReceiver.h"
+#include "network/NetworkManager.h"
+#include "ui/screens/Screens.h"
 
-Adafruit_ST7735 tft(TFT_CS, TFT_DC, TFT_RST);
+namespace {
+mini_tv::Display display;
+mini_tv::ModeManager modes(display);
+mini_tv::NetworkManager network(modes);
+mini_tv::MirrorReceiver mirror(modes, display);
+String command;
+}
 
 void setup() {
   Serial.begin(115200);
   delay(500);
-
-  Serial.println("Starting Mini TV...");
-
-  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-  tft.initR(INITR_BLACKTAB);
-  tft.setRotation(0);
-
-  tft.fillScreen(ST77XX_RED);
-  delay(700);
-  tft.fillScreen(ST77XX_GREEN);
-  delay(700);
-  tft.fillScreen(ST77XX_BLUE);
-  delay(700);
-
-  tft.fillScreen(ST77XX_BLACK);
-  tft.fillRoundRect(5, 5, 118, 150, 8, tft.color565(20, 32, 50));
-
-  tft.setTextColor(ST77XX_CYAN);
-  tft.setTextSize(2);
-  tft.setCursor(12, 20);
-  tft.print("MINI TV");
-
-  tft.drawFastHLine(12, 48, 104, ST77XX_WHITE);
-
-  tft.setTextSize(1);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setCursor(12, 65);
-  tft.print("ESP32 + ST7735");
-  tft.setCursor(12, 85);
-  tft.print("Display: OK");
-  tft.setCursor(12, 100);
-  tft.print("WiFi: Pending");
-
-  tft.fillRoundRect(12, 125, 104, 20, 4, ST77XX_GREEN);
-  tft.setTextColor(ST77XX_BLACK);
-  tft.setCursor(43, 131);
-  tft.print("READY");
-
-  Serial.println("Display test complete!");
+  Serial.println("Starting Mini TV Phase 2...");
+  display.begin();
+  display.runHardwareSmokeTest();
+  modes.begin();
+  network.begin();
+  mirror.begin();
+  Serial.println("Ready. Commands: home, mirror, music, dashboard, settings, error, next");
 }
 
 void loop() {
+  network.handle();
+  mirror.handle();
+  while (Serial.available()) {
+    const char incoming = static_cast<char>(Serial.read());
+    if (incoming == '\n' || incoming == '\r') {
+      command.trim();
+      if (command == "next") {
+        modes.next();
+        Serial.println("Mode changed.");
+      } else if (modes.setModeByName(command.c_str())) {
+        Serial.print("Mode: ");
+        Serial.println(mini_tv::modeName(modes.state().mode));
+      } else if (command.length() > 0) {
+        Serial.println("Unknown command.");
+      }
+      command = "";
+    } else if (isPrintable(incoming) && command.length() < 24) {
+      command += incoming;
+    }
+  }
+
+  static uint32_t lastRefresh = 0;
+  if (millis() - lastRefresh > 1000) {
+    lastRefresh = millis();
+    if (modes.state().mode == mini_tv::Mode::Home) mini_tv::screens::renderHomeDynamic(display, modes.state());
+  }
 }

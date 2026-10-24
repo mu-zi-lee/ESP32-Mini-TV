@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#000000" />
+    <title>MINI TV / CONTROL</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="masthead">
+        <div class="brand">MINI<span>/</span>TV</div>
+        <div class="mast-copy"><span class="eyebrow">DESKTOP CONTROL</span><h1>迷你电视控制台</h1></div>
+        <div class="connection-state"><i></i><span id="connection-label">未连接</span></div>
+      </header>
+      <section class="connection-strip" aria-label="设备连接"><label class="field-label" for="address">DEVICE ADDRESS</label><input id="address" value="http://192.168.4.1" aria-label="设备地址" /><button id="connect" class="button button-primary">连接</button><button id="refresh" class="button button-ghost" aria-label="刷新状态" title="刷新状态">↻</button></section>
+      <p id="status" class="inline-status" role="status">[READY] 等待设备</p>
+      <section class="layout-grid">
+        <article class="surface status-panel"><div class="section-head"><span class="eyebrow">01 / DEVICE</span><span id="device-mode" class="tag">OFFLINE</span></div><div id="status-grid" class="stat-list"><div class="empty-state">尚未连接设备</div></div></article>
+        <article class="surface computer-panel"><div class="section-head"><span class="eyebrow">02 / COMPUTER</span><span id="sync-state" class="tag">WAIT</span></div><div class="computer-hero"><span class="hero-number" id="computer-cpu">--</span><span class="hero-unit">CPU %</span></div><div class="metric-row"><span>MEMORY</span><strong id="computer-memory">--%</strong></div><div class="metric-row"><span>BATTERY</span><strong id="computer-battery">--%</strong></div><div class="metric-row audio-row"><span>AUDIO</span><strong id="computer-audio">未播放</strong></div><div class="audio-meta" id="computer-artist">等待电脑状态</div><div class="action-row"><button id="sync-computer" class="button button-primary">同步电脑</button><button id="mirror-toggle" class="button button-secondary">启动镜像</button></div></article>
+        <article class="surface screen-panel"><div class="section-head"><span class="eyebrow">03 / SCREEN</span><span class="panel-note">160 × 128</span></div><div class="mode-list"><button data-mode="home"><span class="mode-index">A</span><span><b>主页</b><small>HOME</small></span></button><button data-mode="mirror"><span class="mode-index">B</span><span><b>电脑镜像</b><small>MIRROR</small></span></button><button data-mode="music"><span class="mode-index">C</span><span><b>音频信息</b><small>AUDIO</small></span></button><button data-mode="dashboard"><span class="mode-index">D</span><span><b>设备监控</b><small>MONITOR</small></span></button><button data-mode="virtual"><span class="mode-index">E</span><span><b>虚拟画布</b><small>VIRTUAL SCREEN</small></span></button></div></article>
+        <article class="surface virtual-panel"><div class="section-head"><span class="eyebrow">04 / VIRTUAL SCREEN</span><span id="virtual-display-tag" class="tag">未创建</span></div><div class="virtual-frame"><div class="virtual-top"><span>MINI TV / SYSTEM DISPLAY</span><span id="virtual-clock">--:--</span></div><div class="virtual-main"><strong id="virtual-track">未播放</strong><span id="virtual-status">创建后可把任意窗口拖到虚拟屏幕</span></div><div class="virtual-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="virtual-controls"><div><span class="field-label">系统显示器</span><strong id="virtual-resolution">640 × 512 / 30 Hz</strong></div><div><span class="field-label">显示器编号</span><strong id="virtual-display-id">--</strong></div></div><div class="virtual-footer"><span id="virtual-help">创建后会出现在 macOS「显示器」设置中</span><div class="action-row"><button id="virtual-open" class="button button-primary">创建虚拟屏幕</button><button id="virtual-mirror" class="button button-secondary" disabled>发送到 ESP32</button></div></div></article>
+        <article class="surface wifi-panel"><div class="section-head"><span class="eyebrow">05 / NETWORK</span><span class="panel-note">LOCAL ONLY</span></div><form id="wifi-form"><div class="field-row"><div class="field"><label class="field-label" for="network">SCAN NETWORKS</label><select id="network"><option value="">选择网络</option></select></div><button type="button" id="scan-networks" class="button button-secondary">扫描</button></div><label class="field-label" for="ssid">WI-FI NAME</label><input id="ssid" autocomplete="off" required /><label class="field-label" for="password">PASSWORD</label><input id="password" type="password" autocomplete="off" /><button class="button button-primary wide" type="submit">保存并连接</button></form></article>
+        <article class="surface client-panel"><div class="section-head"><span class="eyebrow">06 / CLIENT SETTINGS</span><span class="tag">MAC</span></div><div class="setting-row"><span>自动同步电脑状态</span><button id="auto-sync" class="switch" type="button" aria-pressed="true"><i></i></button></div><div class="setting-row"><span>镜像质量</span><strong>90 / 120ms</strong></div><div class="setting-row"><span>控制地址</span><strong id="client-address">192.168.4.1</strong></div><p class="client-note">完整帧提交 · RGB565 缓冲 · 低延迟局域网传输</p></article>
+      </section>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "version": 0,
+  "examples": [
+    {"v": 0, "id": "1", "op": "device.status", "payload": {}},
+    {"v": 0, "id": "2", "op": "display.set_mode", "payload": {"mode": "mirror"}},
+    {"v": 0, "id": "3", "op": "mirror.stop", "payload": {}}
+  ]
+}
