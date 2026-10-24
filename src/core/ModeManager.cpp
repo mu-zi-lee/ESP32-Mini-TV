@@ -69,6 +69,14 @@ void ModeManager::setMirrorActive(bool active) {
   if (state_.mode == Mode::Mirror && !active) render();
 }
 
+void ModeManager::mirrorLinkLost() {
+  // Keep mirrorActive true after a receive gap. This prevents a transient UDP
+  // loss from painting the NO SIGNAL placeholder over the last good frame.
+  if (state_.mode == Mode::Mirror && state_.mirrorFrames > 0) {
+    state_.mirrorActive = true;
+  }
+}
+
 void ModeManager::recordMirrorFrame() {
   state_.mirrorActive = true;
   state_.mirrorFrames++;

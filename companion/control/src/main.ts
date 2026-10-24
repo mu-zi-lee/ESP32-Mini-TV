@@ -30,6 +30,7 @@ const virtualDisplayID = $("#virtual-display-id");
 const virtualHelp = $("#virtual-help");
 let syncing = false;
 let mirroring = false;
+let mirrorActionInFlight = false;
 let virtualActive = false;
 let virtualMirroring = false;
 let autoSync = true;
@@ -50,6 +51,11 @@ address.addEventListener("change", () => localStorage.setItem("mini-tv.device-ad
 function showMessage(message: string, error = false) { statusText.textContent = message; statusText.className = error ? "notice error" : "notice"; }
 function setConnection(connected: boolean) { connectionLabel.textContent = connected ? "已连接" : "未连接"; connectionLabel.parentElement?.classList.toggle("is-live", connected); }
 function setSyncState(active: boolean) { syncState.textContent = active ? "LIVE" : "WAIT"; syncState.style.color = active ? "var(--green)" : ""; }
+function renderMirrorButton() {
+  mirrorButton.textContent = mirrorActionInFlight ? "正在处理…" : (mirroring ? "停止镜像" : "启动镜像");
+  mirrorButton.classList.toggle("selected", mirroring);
+  mirrorButton.disabled = mirrorActionInFlight;
+}
 function renderComputer(payload: Awaited<ReturnType<typeof DeviceService.computerStatus>>) {
   computerCpu.textContent = payload.cpu > 0 ? String(payload.cpu) : "--";
   computerMemory.textContent = `${payload.memory}%`;
@@ -84,9 +90,10 @@ async function refreshComputer() {
 }
 function renderStatus(status: DeviceStatus) {
   setConnection(true); modeLabel.textContent = status.mode === "HOME" ? "主页" : status.mode; modeLabel.className = "tag active";
-  mirroring = status.mirrorActive;
-  mirrorButton.textContent = mirroring ? "停止镜像" : "启动镜像";
-  mirrorButton.classList.toggle("selected", mirroring);
+  // A status poll can overlap the start/stop RPC. Do not let a response from
+  // just before the action overwrite the user's intended button state.
+  if (!mirrorActionInFlight) mirroring = status.mirrorActive;
+  renderMirrorButton();
   const stationIP = status.stationIp?.trim();
   const setupIP = status.setupIp?.trim() || "192.168.4.1";
   const deviceIP = status.deviceIp?.trim() || (status.stationConnected ? stationIP : setupIP) || setupIP;
@@ -104,15 +111,42 @@ async function refresh(silent = false) {
   statusRefreshInFlight = true;
   if (!silent) showMessage("[CONNECTING] 正在读取设备状态");
   try {
-    const status = await DeviceService.status(address.value);
+    // The setup AP address is only temporary. After the ESP32 joins the
+    // router, DHCP can assign a new address; mDNS keeps the Control app from
+    // getting stuck on a stale 192.168.4.1 value saved in localStorage.
+    const configured = address.value.trim();
+    const candidates = [configured, "http://mini-tv.local", "http://192.168.4.1"]
+      .filter((value, index, list) => value && list.indexOf(value) === index);
+    let status: DeviceStatus | undefined;
+    let connectedCandidate = configured;
+    const errors: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        status = await DeviceService.status(candidate);
+        connectedCandidate = candidate;
+        break;
+      } catch (error) {
+        errors.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!status) throw new Error(`无法找到 ESP32（已尝试 ${candidates.join("、")}）${errors.length ? `；${errors[0]}` : ""}`);
+    if (connectedCandidate !== configured) address.value = connectedCandidate;
     renderStatus(status);
     setSyncState(status.telemetryValid);
     if (!syncing && autoSync) {
-      const result = await DeviceService.startSync(address.value);
-      syncing = result.ok;
-      syncButton.textContent = syncing ? "停止同步" : "同步电脑";
+      try {
+        const result = await DeviceService.startSync(address.value);
+        syncing = result.ok;
+        syncButton.textContent = syncing ? "停止同步" : "同步电脑";
+      } catch (error) {
+        syncing = false;
+        setSyncState(false);
+        if (!silent) showMessage(`[ONLINE] 设备已连接，但电脑状态同步失败：${error instanceof Error ? error.message : String(error)}`, true);
+      }
     }
-    if (!silent) showMessage("[ONLINE] 设备已连接");
+    // A previous poll may have left an error banner behind while the ESP32
+    // was rebooting. Any successful status response supersedes that message.
+    if (!silent || statusText.classList.contains("error")) showMessage("[ONLINE] 设备已连接");
   } catch (error) { setConnection(false); if (!silent) showMessage(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true); }
   finally { statusRefreshInFlight = false; }
 }
@@ -130,14 +164,24 @@ syncButton.addEventListener("click", async () => {
   } catch (error) { syncing = !syncing; showMessage(error instanceof Error ? error.message : String(error), true); }
 });
 mirrorButton.addEventListener("click", async () => {
-  mirroring = !mirroring;
+  if (mirrorActionInFlight) return;
+  const nextMirroring = !mirroring;
+  mirrorActionInFlight = true;
+  mirroring = nextMirroring;
+  renderMirrorButton();
   try {
-    const result = mirroring ? await DeviceService.startMirror(address.value) : await DeviceService.stopMirror(address.value);
-    mirrorButton.textContent = mirroring ? "停止镜像" : "启动镜像";
-    mirrorButton.classList.toggle("selected", mirroring);
-    showMessage(result.message ?? (mirroring ? "镜像已启动" : "镜像已停止"));
-    await refresh();
-  } catch (error) { mirroring = !mirroring; showMessage(error instanceof Error ? error.message : String(error), true); }
+    const result = nextMirroring ? await DeviceService.startMirror(address.value) : await DeviceService.stopMirror(address.value);
+    showMessage(result.message ?? (nextMirroring ? "镜像已启动" : "镜像已停止"));
+  } catch (error) {
+    mirroring = !nextMirroring;
+    showMessage(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    mirrorActionInFlight = false;
+    renderMirrorButton();
+    // Refresh only after the action is complete so a stale poll cannot make
+    // the button appear to close itself immediately after starting.
+    await refresh(true);
+  }
 });
 autoSyncButton.addEventListener("click", async () => {
   autoSync = !autoSync;

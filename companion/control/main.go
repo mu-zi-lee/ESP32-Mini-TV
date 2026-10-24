@@ -68,7 +68,11 @@ func telemetryPayload(stats ComputerTelemetry) TelemetryPayload {
 
 type DeviceService struct{}
 
-const deviceRequestTimeout = 4 * time.Second
+// A stale setup/AP address should not block the live station address for
+// several polling cycles. The Control UI tries multiple candidates, so a
+// short per-request timeout keeps recovery responsive after a Wi-Fi roam or
+// ESP32 reboot.
+const deviceRequestTimeout = 1500 * time.Millisecond
 
 type mirrorTask struct {
 	cancel context.CancelFunc
@@ -209,8 +213,30 @@ func (d DeviceService) startMirrorTask(address, kind string, loop func(context.C
 	backgroundTasks.mirror[address] = mirrorTask{cancel: cancel, kind: kind, token: token}
 	backgroundTasks.Unlock()
 	go func() {
-		if err := loop(ctx, address); err != nil {
-			log.Printf("%s 已停止：%v", kind, err)
+		// Screen capture can fail transiently when macOS revokes/reacquires
+		// Screen Recording permission, a display is reconfigured, or FFmpeg
+		// exits after a hot-plug. Keep the mirror lease alive and restart the
+		// producer instead of turning the ESP32 page off after one bad frame.
+		for attempt := 1; ; attempt++ {
+			err := loop(ctx, address)
+			if ctx.Err() != nil {
+				break
+			}
+			if err != nil {
+				log.Printf("%s 采集暂时中断（第 %d 次）：%v；1 秒后重试", kind, attempt, err)
+			} else {
+				log.Printf("%s 采集流结束；1 秒后重试", kind)
+			}
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				break
+			case <-timer.C:
+			}
+			if ctx.Err() != nil {
+				break
+			}
 		}
 		backgroundTasks.Lock()
 		current, ownsLease := backgroundTasks.mirror[address]

@@ -18,6 +18,9 @@ class ModeManager {
                       bool playing, const char* track, const char* artist,
                       uint16_t position, uint16_t duration);
   void setMirrorActive(bool active);
+  // A transport gap is different from an explicit user stop: keep the last
+  // rendered mirror frame on screen while the sender is recovering.
+  void mirrorLinkLost();
   void recordMirrorFrame();
   const AppState& state() const { return state_; }
 

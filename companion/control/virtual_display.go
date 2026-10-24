@@ -2,13 +2,11 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
 	"io"
 	"log"
 	"net"
@@ -193,11 +191,7 @@ func readVirtualFrame(reader io.Reader) ([]byte, error) {
 		canvas.Pix[index+2] = bgra[index]
 		canvas.Pix[index+3] = bgra[index+3]
 	}
-	var output bytes.Buffer
-	if err := jpeg.Encode(&output, canvas, &jpeg.Options{Quality: jpegQuality}); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
+	return encodeMirrorJPEG(canvas)
 }
 
 func virtualDisplayStatus() VirtualDisplayStatus {
@@ -273,7 +267,9 @@ func virtualMirrorLoop(ctx context.Context, deviceAddress string) error {
 	}()
 	frameID := uint16(0)
 	packet := make([]byte, chunkPayload+14)
+	delta := mirrorDeltaState{}
 	var latest []byte
+	lastHeartbeatAt := time.Time{}
 	ticker := time.NewTicker(mirrorInterval)
 	defer ticker.Stop()
 	for {
@@ -291,12 +287,39 @@ func virtualMirrorLoop(ctx context.Context, deviceAddress string) error {
 			if len(latest) == 0 {
 				continue
 			}
-			log.Printf("virtual mirror: frame encoded bytes=%d id=%d", len(latest), frameID)
-			if err := sendFrame(conn, address, frameID, latest, packet); err != nil {
-				log.Printf("virtual mirror: udp send failed: %v", err)
+			changed := delta.lastCanvas == nil || mirrorFrameHash(latest) != delta.lastHash
+			heartbeat := lastHeartbeatAt.IsZero() || time.Since(lastHeartbeatAt) >= mirrorHeartbeatInterval
+			if !changed && !heartbeat {
+				continue
+			}
+			forceKeyframe := time.Since(delta.lastKeyframe) >= mirrorKeyframeInterval
+			full, tiles, prepareErr := delta.prepare(latest, forceKeyframe)
+			if prepareErr != nil {
+				log.Printf("virtual mirror: frame decode failed: %v", prepareErr)
+				return prepareErr
+			}
+			if full {
+				if err := sendPreferredFullFrame(conn, address, frameID, latest, packet); err != nil {
+					log.Printf("virtual mirror: udp send failed: %v", err)
+					return err
+				}
+				delta.commitKeyframe(time.Now())
+			} else if len(tiles) > 0 {
+				for _, tile := range tiles {
+					if err := sendMirrorTile(conn, address, frameID, tile, packet); err != nil {
+						log.Printf("virtual mirror: udp tile send failed: %v", err)
+						return err
+					}
+					frameID++
+				}
+			} else if err := sendFrame(conn, address, frameID, latest, packet); err != nil {
+				log.Printf("virtual mirror: udp heartbeat failed: %v", err)
 				return err
 			}
-			frameID++
+			if full || len(tiles) == 0 {
+				frameID++
+			}
+			lastHeartbeatAt = time.Now()
 		}
 	}
 }
