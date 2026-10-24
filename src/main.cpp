@@ -51,6 +51,11 @@ void loop() {
   static uint32_t lastRefresh = 0;
   if (millis() - lastRefresh > 1000) {
     lastRefresh = millis();
-    if (modes.state().mode == mini_tv::Mode::Home) mini_tv::screens::renderHomeDynamic(display, modes.state());
+    switch (modes.state().mode) {
+      case mini_tv::Mode::Home: mini_tv::screens::renderHomeDynamic(display, modes.state()); break;
+      case mini_tv::Mode::Music: mini_tv::screens::renderMusicDynamic(display, modes.state()); break;
+      case mini_tv::Mode::Dashboard: mini_tv::screens::renderDashboardDynamic(display, modes.state()); break;
+      default: break;
+    }
   }
 }

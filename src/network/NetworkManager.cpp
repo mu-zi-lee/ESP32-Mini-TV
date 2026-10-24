@@ -151,6 +151,9 @@ void NetworkManager::handleStatus() {
                       "\",\"deviceIp\":\"" + deviceIp +
                       "\",\"rssi\":" + String(stationConnected_ ? WiFi.RSSI() : 0) +
                       ",\"telemetryValid\":" + String(modes_.state().telemetryValid ? "true" : "false") +
+                      ",\"localTime\":\"" + jsonEscape(String(modes_.state().localTime)) +
+                      "\",\"localDate\":\"" + jsonEscape(String(modes_.state().localDate)) +
+                      "\"" +
                       ",\"playing\":" + String(modes_.state().musicPlaying ? "true" : "false") +
                       ",\"track\":\"" + jsonEscape(String(modes_.state().track)) +
                       "\",\"artist\":\"" + jsonEscape(String(modes_.state().artist)) + "\"" +
@@ -169,13 +172,14 @@ void NetworkManager::handleTelemetry() {
     sendJson("{\"ok\":false,\"error\":\"body_too_large\"}", 413);
     return;
   }
-  String cpu, memory, battery, charging, playing, track, artist, position, duration;
+  String cpu, memory, battery, charging, playing, track, artist, position, duration, localTime, localDate;
   const bool valid = jsonValue(body, "cpu", cpu) && jsonValue(body, "memory", memory) &&
                      jsonValue(body, "battery", battery) && jsonValue(body, "charging", charging) &&
                      jsonValue(body, "playing", playing) && jsonValue(body, "track", track) &&
                      jsonValue(body, "artist", artist) && jsonValue(body, "position", position) &&
-                     jsonValue(body, "duration", duration);
-  if (!valid || track.length() >= 48 || artist.length() >= 40) {
+                     jsonValue(body, "duration", duration) && jsonValue(body, "time", localTime) &&
+                     jsonValue(body, "date", localDate);
+  if (!valid || track.length() >= 48 || artist.length() >= 40 || localTime.length() >= 6 || localDate.length() >= 12) {
     sendJson("{\"ok\":false,\"error\":\"invalid_telemetry\"}", 400);
     return;
   }
@@ -185,7 +189,8 @@ void NetworkManager::handleTelemetry() {
                          charging == "true" || charging == "1", playing == "true" || playing == "1",
                          track.c_str(), artist.c_str(),
                          static_cast<uint16_t>(constrain(position.toInt(), 0, 65535)),
-                         static_cast<uint16_t>(constrain(duration.toInt(), 0, 65535)));
+                         static_cast<uint16_t>(constrain(duration.toInt(), 0, 65535)),
+                         localTime.c_str(), localDate.c_str());
   sendJson("{\"ok\":true}");
 }
 

@@ -14,6 +14,8 @@ export interface DeviceStatus {
   setupIp: string;
   rssi: number;
   telemetryValid: boolean;
+  localTime: string;
+  localDate: string;
   playing: boolean;
   track: string;
   artist: string;
@@ -38,11 +40,18 @@ export interface Result {
   mode?: string;
 }
 
+export interface SerialPort {
+  port: string;
+  description: string;
+}
+
 export interface TelemetryPayload {
   cpu: number;
   memory: number;
   battery: number;
   charging: boolean;
+  time: string;
+  date: string;
   playing: boolean;
   track: string;
   artist: string;
@@ -68,6 +77,12 @@ export const DeviceService = {
    */
   computerStatus(): Promise<TelemetryPayload> {
     return call("DeviceService.ComputerStatus");
+  },
+  flashFirmware(port: string): Promise<Result> {
+    return call("DeviceService.FlashFirmware", port);
+  },
+  listSerialPorts(): Promise<SerialPort[]> {
+    return call("DeviceService.ListSerialPorts");
   },
   scanNetworks(address: string): Promise<NetworkList> {
     return call("DeviceService.ScanNetworks", address);

@@ -20,10 +20,20 @@ void text(Adafruit_GFX& display, int16_t x, int16_t y, const char* value, uint8_
 }
 
 void header(Adafruit_GFX& display, const char* title, const AppState& state) {
-  display.fillRect(0, 0, 160, 18, theme().panelAlt);
-  text(display, 6, 5, title, 1, theme().text);
-  display.fillCircle(148, 9, 3, state.network == NetworkState::Online ? theme().good : theme().warning);
-  text(display, 153, 5, state.network == NetworkState::Online ? "N" : "-", 1, theme().muted);
+  display.fillRect(0, 0, 160, 16, theme().panelAlt);
+  text(display, 5, 4, "MINI TV", 1, theme().text);
+  text(display, 66, 4, title, 1, theme().accent);
+  const uint16_t connection = state.network == NetworkState::Online
+                                  ? theme().good
+                                  : (state.network == NetworkState::Connecting ? theme().warning : theme().danger);
+  display.fillCircle(132, 8, 3, connection);
+  if (state.telemetryValid) {
+    char battery[8];
+    snprintf(battery, sizeof(battery), "%u%%", state.batteryPercent);
+    text(display, 136, 4, battery, 1, theme().text);
+  } else {
+    text(display, 142, 4, "--", 1, theme().muted);
+  }
 }
 
 void card(Adafruit_GFX& display, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {

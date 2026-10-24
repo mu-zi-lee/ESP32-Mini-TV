@@ -8,6 +8,10 @@ namespace mini_tv {
 void ModeManager::begin() { state_.startedAt = millis(); render(); }
 
 void ModeManager::setMode(Mode mode) {
+  // A live mirror owns the whole panel. Keep the selected mode on MIRROR
+  // until the sender is explicitly stopped, otherwise periodic telemetry and
+  // the main loop can paint HOME over incoming frames.
+  if (state_.mirrorActive && mode != Mode::Mirror) return;
   if (state_.mode == mode) return;
   state_.mode = mode;
   state_.frameCount++;
@@ -18,7 +22,7 @@ void ModeManager::setMode(Mode mode) {
 }
 
 void ModeManager::next() {
-  const uint8_t nextMode = (static_cast<uint8_t>(state_.mode) + 1) % 6;
+  const uint8_t nextMode = (static_cast<uint8_t>(state_.mode) + 1) % 4;
   setMode(static_cast<Mode>(nextMode));
 }
 
@@ -35,7 +39,8 @@ bool ModeManager::setModeByName(const char* name) {
 
 void ModeManager::updateTelemetry(uint8_t cpu, uint8_t memory, uint8_t battery, bool charging,
                                   bool playing, const char* track, const char* artist,
-                                  uint16_t position, uint16_t duration) {
+                                  uint16_t position, uint16_t duration,
+                                  const char* localTime, const char* localDate) {
   state_.cpuPercent = cpu > 100 ? 100 : cpu;
   state_.memoryPercent = memory > 100 ? 100 : memory;
   state_.batteryPercent = battery > 100 ? 100 : battery;
@@ -43,18 +48,16 @@ void ModeManager::updateTelemetry(uint8_t cpu, uint8_t memory, uint8_t battery, 
   state_.musicPlaying = playing;
   state_.musicPosition = position;
   state_.musicDuration = duration;
+  snprintf(state_.localTime, sizeof(state_.localTime), "%s", localTime ? localTime : "--:--");
+  snprintf(state_.localDate, sizeof(state_.localDate), "%s", localDate ? localDate : "NO DATE");
   snprintf(state_.track, sizeof(state_.track), "%s", track ? track : "");
   snprintf(state_.artist, sizeof(state_.artist), "%s", artist ? artist : "");
   state_.telemetryValid = true;
   state_.mockData = false;
   state_.lastTelemetryAt = millis();
-  // Follow a live track automatically unless the user is in an explicit
-  // mirror session. This keeps audio visible without touchscreen input.
-  if (state_.track[0] != '\0' && state_.mode != Mode::Mirror && state_.mode != Mode::Music) {
-    state_.mode = Mode::Music;
-    state_.frameCount++;
-    screens::renderMusic(display_, state_);
-  } else if (state_.mode == Mode::Dashboard) {
+  // Control owns mode changes. Telemetry refreshes the selected page without
+  // interrupting the user's current view.
+  if (state_.mode == Mode::Dashboard) {
     screens::renderDashboardDynamic(display_, state_);
   } else if (state_.mode == Mode::Music) {
     screens::renderMusicDynamic(display_, state_);
@@ -66,6 +69,10 @@ void ModeManager::updateTelemetry(uint8_t cpu, uint8_t memory, uint8_t battery, 
 void ModeManager::setMirrorActive(bool active) {
   if (state_.mirrorActive == active) return;
   state_.mirrorActive = active;
+  if (active && state_.mode != Mode::Mirror) {
+    state_.mode = Mode::Mirror;
+    state_.frameCount++;
+  }
   if (state_.mode == Mode::Mirror && !active) render();
 }
 
@@ -78,7 +85,7 @@ void ModeManager::mirrorLinkLost() {
 }
 
 void ModeManager::recordMirrorFrame() {
-  state_.mirrorActive = true;
+  if (!state_.mirrorActive) return;
   state_.mirrorFrames++;
   state_.lastMirrorFrameAt = millis();
 }
@@ -87,7 +94,7 @@ void ModeManager::render() {
   // A received mirror frame owns the whole 160x128 canvas. Network state
   // changes can request a general render, but must not paint the NO SIGNAL
   // placeholder over a live frame.
-  if (state_.mode == Mode::Mirror && state_.mirrorActive) return;
+  if (state_.mirrorActive) return;
   switch (state_.mode) {
     case Mode::Home: screens::renderHome(display_, state_); break;
     case Mode::Mirror: screens::renderMirror(display_, state_); break;

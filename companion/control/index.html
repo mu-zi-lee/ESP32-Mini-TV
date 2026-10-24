@@ -3,28 +3,91 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#101416" />
     <title>MINI TV / CONTROL</title>
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
-    <main>
-      <header class="masthead">
+    <main class="app-shell">
+      <header class="topbar">
         <div class="brand">MINI<span>/</span>TV</div>
-        <div class="mast-copy"><span class="eyebrow">DESKTOP CONTROL</span><h1>迷你电视控制台</h1></div>
+        <nav class="workspace-nav" aria-label="工作区">
+          <button class="nav-button is-active" data-view="control-view">控制</button>
+          <button class="nav-button" data-view="prep-view">设备准备</button>
+        </nav>
         <div class="connection-state"><i></i><span id="connection-label">未连接</span></div>
+        <button id="settings-open" class="icon-button" type="button" aria-label="打开设置" title="设置">⚙</button>
       </header>
-      <section class="connection-strip" aria-label="设备连接"><label class="field-label" for="address">DEVICE ADDRESS</label><input id="address" value="http://192.168.4.1" aria-label="设备地址" /><button id="connect" class="button button-primary">连接</button><button id="refresh" class="button button-ghost" aria-label="刷新状态" title="刷新状态">↻</button></section>
-      <p id="status" class="inline-status" role="status">[READY] 等待设备</p>
-      <section class="layout-grid">
-        <article class="surface status-panel"><div class="section-head"><span class="eyebrow">01 / DEVICE</span><span id="device-mode" class="tag">OFFLINE</span></div><div id="status-grid" class="stat-list"><div class="empty-state">尚未连接设备</div></div></article>
-        <article class="surface computer-panel"><div class="section-head"><span class="eyebrow">02 / COMPUTER</span><span id="sync-state" class="tag">WAIT</span></div><div class="computer-hero"><span class="hero-number" id="computer-cpu">--</span><span class="hero-unit">CPU %</span></div><div class="metric-row"><span>MEMORY</span><strong id="computer-memory">--%</strong></div><div class="metric-row"><span>BATTERY</span><strong id="computer-battery">--%</strong></div><div class="metric-row audio-row"><span>AUDIO</span><strong id="computer-audio">未播放</strong></div><div class="audio-meta" id="computer-artist">等待电脑状态</div><div class="action-row"><button id="sync-computer" class="button button-primary">同步电脑</button><button id="mirror-toggle" class="button button-secondary">启动镜像</button></div></article>
-        <article class="surface screen-panel"><div class="section-head"><span class="eyebrow">03 / SCREEN</span><span class="panel-note">160 × 128</span></div><div class="mode-list"><button data-mode="home"><span class="mode-index">A</span><span><b>主页</b><small>HOME</small></span></button><button data-mode="mirror"><span class="mode-index">B</span><span><b>电脑镜像</b><small>MIRROR</small></span></button><button data-mode="music"><span class="mode-index">C</span><span><b>音频信息</b><small>AUDIO</small></span></button><button data-mode="dashboard"><span class="mode-index">D</span><span><b>设备监控</b><small>MONITOR</small></span></button><button data-mode="virtual"><span class="mode-index">E</span><span><b>虚拟画布</b><small>VIRTUAL SCREEN</small></span></button></div></article>
-        <article class="surface virtual-panel"><div class="section-head"><span class="eyebrow">04 / VIRTUAL SCREEN</span><span id="virtual-display-tag" class="tag">未创建</span></div><div class="virtual-frame"><div class="virtual-top"><span>MINI TV / SYSTEM DISPLAY</span><span id="virtual-clock">--:--</span></div><div class="virtual-main"><strong id="virtual-track">未播放</strong><span id="virtual-status">创建后可把任意窗口拖到虚拟屏幕</span></div><div class="virtual-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="virtual-controls"><div><span class="field-label">系统显示器</span><strong id="virtual-resolution">640 × 512 / 30 Hz</strong></div><div><span class="field-label">显示器编号</span><strong id="virtual-display-id">--</strong></div></div><div class="virtual-footer"><span id="virtual-help">创建后会出现在 macOS「显示器」设置中</span><div class="action-row"><button id="virtual-open" class="button button-primary">创建虚拟屏幕</button><button id="virtual-mirror" class="button button-secondary" disabled>发送到 ESP32</button></div></div></article>
-        <article class="surface wifi-panel"><div class="section-head"><span class="eyebrow">05 / NETWORK</span><span class="panel-note">LOCAL ONLY</span></div><form id="wifi-form"><div class="field-row"><div class="field"><label class="field-label" for="network">SCAN NETWORKS</label><select id="network"><option value="">选择网络</option></select></div><button type="button" id="scan-networks" class="button button-secondary">扫描</button></div><label class="field-label" for="ssid">WI-FI NAME</label><input id="ssid" autocomplete="off" required /><label class="field-label" for="password">PASSWORD</label><input id="password" type="password" autocomplete="off" /><button class="button button-primary wide" type="submit">保存并连接</button></form></article>
-        <article class="surface client-panel"><div class="section-head"><span class="eyebrow">06 / CLIENT SETTINGS</span><span class="tag">MAC</span></div><div class="setting-row"><span>自动同步电脑状态</span><button id="auto-sync" class="switch" type="button" aria-pressed="true"><i></i></button></div><div class="setting-row"><span>镜像质量</span><strong>88 / 30ms</strong></div><div class="setting-row"><span>控制地址</span><strong id="client-address">192.168.4.1</strong></div><p class="client-note">最新帧优先 · JPEG / UDP · 高刷新实验档</p></article>
+
+      <section id="control-view" class="workspace is-active">
+        <div class="device-line">
+          <div>
+            <span class="eyebrow">当前设备</span>
+            <h1>迷你电视控制台</h1>
+            <p id="device-subtitle">等待 ESP32 连接</p>
+          </div>
+          <div class="device-actions">
+            <input id="address" value="http://192.168.4.1" aria-label="设备地址" />
+            <button id="connect" class="button button-primary">连接设备</button>
+            <button id="refresh" class="icon-button" type="button" aria-label="刷新状态" title="刷新状态">↻</button>
+          </div>
+        </div>
+        <p id="status" class="notice" role="status">等待设备</p>
+
+        <div class="health-strip">
+          <div><span>网络</span><strong id="health-network">--</strong></div>
+          <div><span>信号</span><strong id="health-rssi">--</strong></div>
+          <div><span>固件</span><strong id="health-firmware">0.3.0</strong></div>
+          <div><span>数据</span><strong id="health-telemetry">等待同步</strong></div>
+        </div>
+
+        <div class="control-grid">
+          <section class="panel mode-panel">
+            <div class="panel-heading"><div><span class="eyebrow">设备画面</span><h2>现在显示</h2></div><span id="device-mode" class="status-tag">离线</span></div>
+            <div class="mode-list">
+              <button data-mode="home" class="mode-button"><span class="mode-icon">⌂</span><span><b>主页</b><small>时间与概览</small></span></button>
+              <button data-mode="mirror" class="mode-button"><span class="mode-icon">▣</span><span><b>镜像</b><small>Mac 屏幕</small></span></button>
+              <button data-mode="music" class="mode-button"><span class="mode-icon">♪</span><span><b>音乐</b><small>正在播放</small></span></button>
+              <button data-mode="dashboard" class="mode-button"><span class="mode-icon">◫</span><span><b>系统</b><small>CPU 与内存</small></span></button>
+            </div>
+            <div class="panel-footnote"><span>ESP32 只能通过 Control 切换页面</span><span id="selected-mode-note">--</span></div>
+          </section>
+
+          <section class="panel computer-panel">
+            <div class="panel-heading"><div><span class="eyebrow">Mac 状态</span><h2>电脑数据</h2></div><span id="sync-state" class="status-tag">等待</span></div>
+            <div class="time-readout"><strong id="computer-time">--:--</strong><span id="computer-date">等待同步</span></div>
+            <div class="metric-grid">
+              <div><span>CPU</span><strong id="computer-cpu">--</strong><em>%</em></div>
+              <div><span>内存</span><strong id="computer-memory">--</strong><em>%</em></div>
+              <div><span>电量</span><strong id="computer-battery">--</strong><em id="computer-charging"></em></div>
+            </div>
+            <div class="audio-summary"><span>正在播放</span><strong id="computer-audio">未播放</strong><small id="computer-artist">等待电脑状态</small></div>
+            <div class="action-row"><button id="sync-computer" class="button button-primary">开始同步</button><button id="mirror-toggle" class="button button-secondary">开始镜像</button></div>
+          </section>
+        </div>
+
+        <div class="utility-grid">
+          <section class="panel utility-panel"><div><span class="eyebrow">虚拟屏幕</span><h2>把窗口发送到 ESP32</h2><p id="virtual-help">创建系统级显示器后，可以把任意窗口拖过去。</p></div><div class="utility-actions"><span id="virtual-display-tag" class="status-tag">未创建</span><button id="virtual-open" class="button button-secondary">创建虚拟屏幕</button><button id="virtual-mirror" class="button button-primary" disabled>发送到 ESP32</button></div><div class="hidden-data"><span id="virtual-clock">--:--</span><span id="virtual-track">未播放</span><span id="virtual-status">等待</span><span id="virtual-resolution">640 × 512 / 30 Hz</span><span id="virtual-display-id">--</span></div></section>
+          <section class="panel utility-panel"><div><span class="eyebrow">网络</span><h2>Wi‑Fi 配置</h2><p id="network-summary">在设置中扫描并保存家庭 Wi‑Fi。</p></div><button id="network-open" class="button button-secondary">打开网络设置</button></section>
+        </div>
+      </section>
+
+      <section id="prep-view" class="workspace prep-view" hidden>
+        <div class="prep-heading"><div><span class="eyebrow">设备准备</span><h1>烧录 ESP32 固件</h1><p>连接 USB、选择串口，Control 会完成编译、烧录和校验。</p></div><button id="prep-scan" class="button button-secondary">重新扫描</button></div>
+        <ol class="steps"><li class="is-current"><span>1</span>选择设备</li><li><span>2</span>写入固件</li><li><span>3</span>验证上线</li></ol>
+        <section class="panel flash-panel"><div class="panel-heading"><div><span class="eyebrow">USB 设备</span><h2>选择 ESP32 串口</h2></div><span id="flash-device-state" class="status-tag">未扫描</span></div><div class="port-row"><select id="serial-port" aria-label="ESP32 串口"><option value="">点击扫描可发现设备</option></select><button id="serial-scan" class="button button-secondary">扫描串口</button></div><p id="serial-help" class="helper">请使用支持数据传输的 USB 线。找不到设备时，可以按住开发板 BOOT 键后重试。</p></section>
+        <section class="panel flash-action"><div><span class="eyebrow">当前项目</span><h2>ESP32 Mini TV · v0.3.0</h2><p>将从当前项目编译固件，然后写入已选择的设备。</p></div><button id="flash-start" class="button button-primary" disabled>编译并烧录</button></section>
+        <section id="flash-progress" class="panel progress-panel" hidden><div class="progress-title"><strong id="flash-title">正在准备烧录</strong><span id="flash-percent">进行中</span></div><div class="progress-track"><i></i></div><div class="progress-steps"><span class="is-done">✓ 连接设备</span><span class="is-current">○ 写入固件</span><span>○ 重启并验证</span></div><details><summary>查看详细日志</summary><pre id="flash-log"></pre></details></section>
       </section>
     </main>
+
+    <aside id="settings-drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-heading"><div><span class="eyebrow">设置</span><h2>设备连接</h2></div><button id="settings-close" class="icon-button" type="button" aria-label="关闭设置">×</button></div>
+      <form id="wifi-form" class="settings-form"><label for="network">扫描网络</label><div class="inline-field"><select id="network"><option value="">选择网络</option></select><button type="button" id="scan-networks" class="button button-secondary">扫描</button></div><label for="ssid">Wi‑Fi 名称</label><input id="ssid" autocomplete="off" required /><label for="password">密码</label><input id="password" type="password" autocomplete="off" /><button class="button button-primary" type="submit">保存并连接</button></form>
+      <div class="drawer-setting"><span>自动同步电脑状态</span><button id="auto-sync" class="switch" type="button" aria-pressed="true"><i></i></button></div>
+      <div class="drawer-info"><span>设备地址</span><strong id="client-address">192.168.4.1</strong></div>
+    </aside>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

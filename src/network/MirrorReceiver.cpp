@@ -254,6 +254,12 @@ bool MirrorReceiver::acceptPacket(const uint8_t* packet, size_t length) {
 
 bool MirrorReceiver::finishFrame() {
   if (frameLength_ == 0) return false;
+  if (!modes_.state().mirrorActive) {
+    receivedChunks_ = 0;
+    receivedBitmap_ = 0;
+    frameLength_ = 0;
+    return true;
+  }
   if (packetMode_ == kModeRawRgb565) {
     display_.canvas().startWrite();
     display_.canvas().setAddrWindow(0, 0, 160, 128);
@@ -288,6 +294,12 @@ bool MirrorReceiver::finishFrame() {
 
 bool MirrorReceiver::finishTile() {
   if (frameLength_ == 0 || packetMode_ != kModeTile) return false;
+  if (!modes_.state().mirrorActive) {
+    receivedChunks_ = 0;
+    receivedBitmap_ = 0;
+    frameLength_ = 0;
+    return true;
+  }
   if (!tileBatchAccepted_) {
     receivedChunks_ = 0;
     receivedBitmap_ = 0;

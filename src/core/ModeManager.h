@@ -16,7 +16,8 @@ class ModeManager {
   void setNetworkState(NetworkState state) { state_.network = state; }
   void updateTelemetry(uint8_t cpu, uint8_t memory, uint8_t battery, bool charging,
                       bool playing, const char* track, const char* artist,
-                      uint16_t position, uint16_t duration);
+                      uint16_t position, uint16_t duration,
+                      const char* localTime, const char* localDate);
   void setMirrorActive(bool active);
   // A transport gap is different from an explicit user stop: keep the last
   // rendered mirror frame on screen while the sender is recovering.

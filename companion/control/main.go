@@ -9,6 +9,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +29,8 @@ type DeviceStatus struct {
 	SetupIP          string `json:"setupIp"`
 	RSSI             int    `json:"rssi"`
 	TelemetryValid   bool   `json:"telemetryValid"`
+	LocalTime        string `json:"localTime"`
+	LocalDate        string `json:"localDate"`
 	Playing          bool   `json:"playing"`
 	Track            string `json:"track"`
 	Artist           string `json:"artist"`
@@ -51,6 +56,8 @@ type TelemetryPayload struct {
 	Memory   int    `json:"memory"`
 	Battery  int    `json:"battery"`
 	Charging bool   `json:"charging"`
+	Time     string `json:"time"`
+	Date     string `json:"date"`
 	Playing  bool   `json:"playing"`
 	Track    string `json:"track"`
 	Artist   string `json:"artist"`
@@ -61,12 +68,51 @@ type TelemetryPayload struct {
 func telemetryPayload(stats ComputerTelemetry) TelemetryPayload {
 	return TelemetryPayload{
 		CPU: stats.CPU, Memory: stats.Memory, Battery: stats.Battery, Charging: stats.Charging,
+		Time: time.Now().Format("15:04"), Date: strings.ToUpper(time.Now().Format("Jan 02")),
 		Playing: stats.Playing, Track: stats.Track, Artist: stats.Artist,
 		Position: stats.Position, Duration: stats.Duration,
 	}
 }
 
 type DeviceService struct{}
+
+type SerialPort struct {
+	Port        string `json:"port"`
+	Description string `json:"description"`
+}
+
+func projectRoot() string {
+	if configured := strings.TrimSpace(os.Getenv("MINI_TV_PROJECT_ROOT")); configured != "" {
+		if _, err := os.Stat(filepath.Join(configured, "platformio.ini")); err == nil {
+			return configured
+		}
+	}
+	current, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(current, "platformio.ini")); err == nil {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return "."
+}
+
+func platformioBinary() string {
+	if path, err := exec.LookPath("pio"); err == nil {
+		return path
+	}
+	if path, err := exec.LookPath("platformio"); err == nil {
+		return path
+	}
+	return "pio"
+}
 
 // A stale setup/AP address should not block the live station address for
 // several polling cycles. The Control UI tries multiple candidates, so a
@@ -133,6 +179,46 @@ func (d DeviceService) Status(address string) (DeviceStatus, error) {
 	var r DeviceStatus
 	err := d.call(address, "/api/status", http.MethodGet, nil, &r)
 	return r, err
+}
+
+func (DeviceService) ListSerialPorts() ([]SerialPort, error) {
+	command := exec.Command(platformioBinary(), "device", "list", "--json-output")
+	command.Dir = projectRoot()
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("无法扫描串口：%w", err)
+	}
+	var ports []SerialPort
+	if err := json.Unmarshal(output, &ports); err != nil {
+		return nil, fmt.Errorf("无法读取串口列表：%w", err)
+	}
+	return ports, nil
+}
+
+func (DeviceService) FlashFirmware(port string) (Result, error) {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return Result{}, errors.New("请先选择 ESP32 串口")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, platformioBinary(), "run", "-t", "upload", "--upload-port", port)
+	command.Dir = projectRoot()
+	output, err := command.CombinedOutput()
+	message := strings.TrimSpace(string(output))
+	if len(message) > 1800 {
+		message = message[len(message)-1800:]
+	}
+	if ctx.Err() != nil {
+		return Result{}, fmt.Errorf("烧录超时，请检查 USB 连接")
+	}
+	if err != nil {
+		if message == "" {
+			return Result{OK: false}, fmt.Errorf("烧录失败：%w", err)
+		}
+		return Result{OK: false, Message: message}, fmt.Errorf("烧录失败：%w\n%s", err, message)
+	}
+	return Result{OK: true, Message: message}, nil
 }
 func (d DeviceService) ScanNetworks(address string) (NetworkList, error) {
 	var r NetworkList
@@ -365,7 +451,7 @@ func stopBackgroundTasks() {
 func main() {
 	mygo.Bind(DeviceService{})
 	mygo.App.WhenReady(func() {
-		window := mygo.NewWindow(mygo.WindowOptions{Title: "ESP32 Mini TV Control", Width: 900, Height: 620, MinWidth: 620, MinHeight: 480, URL: "/", StateKey: "main", BackgroundColor: "light-dark(#f4f7fb, #0c1118)"})
+		window := mygo.NewWindow(mygo.WindowOptions{Title: "MINI TV Control", Width: 960, Height: 700, MinWidth: 620, MinHeight: 480, URL: "/", StateKey: "main", BackgroundColor: "#f7f7f5"})
 		window.OnClose(func(*mygo.CloseEvent) { stopBackgroundTasks() })
 	})
 	if err := mygo.App.Run(); err != nil {

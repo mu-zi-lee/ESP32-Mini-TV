@@ -25,6 +25,8 @@ struct AppState {
   uint32_t startedAt = 0;
   uint32_t lastTelemetryAt = 0;
   uint32_t lastMirrorFrameAt = 0;
+  char localTime[6] = "--:--";
+  char localDate[12] = "NO DATE";
   char track[48] = "";
   char artist[40] = "";
   const char* errorMessage = "No error";
