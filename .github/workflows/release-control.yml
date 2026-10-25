@@ -32,7 +32,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.2.x"
+          bun-version: "1.4.x"
 
       - name: Install frontend dependencies
         working-directory: companion/control
@@ -67,7 +67,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.2.x"
+          bun-version: "1.4.x"
 
       - name: Install frontend dependencies
         working-directory: companion/control
@@ -101,7 +101,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.2.x"
+          bun-version: "1.4.x"
 
       - name: Install frontend dependencies
         working-directory: companion/control
