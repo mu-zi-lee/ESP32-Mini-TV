@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,7 @@ func virtualHelperPath() string {
 		)
 	}
 	if working, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(working, "resources", "darwin", "virtual-display-helper"))
 		candidates = append(candidates, filepath.Join(working, "resources", "virtual-display-helper"))
 	}
 	for _, candidate := range candidates {
@@ -67,6 +69,9 @@ func virtualHelperPath() string {
 }
 
 func (v *virtualDisplaySession) Start() (VirtualDisplayStatus, error) {
+	if runtime.GOOS != "darwin" {
+		return VirtualDisplayStatus{}, errors.New("系统虚拟屏幕仅支持 macOS；当前平台请使用普通屏幕镜像")
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.cmd != nil && v.cmd.Process != nil {
@@ -239,6 +244,7 @@ func virtualMirrorLoop(ctx context.Context, deviceAddress string) error {
 		return err
 	}
 	defer stream.Close()
+	startAgentStatusPublisher(ctx, conn, address)
 	// Closing the Unix connection on cancellation unblocks io.ReadFull even
 	// when the virtual display is idle and has not emitted a new frame.
 	stopReader := make(chan struct{})

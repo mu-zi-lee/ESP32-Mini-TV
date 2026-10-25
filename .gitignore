@@ -8,12 +8,15 @@
 !.env.example
 include/wifi_config.h
 scripts/__pycache__/
+**/__pycache__/
 **/.agents/
 
 # Keep the public project overview in the repository; other prose docs stay local.
 /*.md
 /**/*.md
 !/README.md
+!/RELEASE_TEMPLATE.md
+!/companion/control/skills/agent-status/SKILL.md
 /*.txt
 /**/*.txt
 AGENTS.md

@@ -19,6 +19,8 @@ class MirrorReceiver {
   bool acceptPacket(const uint8_t* packet, size_t length);
   bool finishFrame();
   bool finishTile();
+  void setAgentStatus(uint8_t status);
+  void renderAgentStatus(bool force = false);
 
   ModeManager& modes_;
   Display& display_;
@@ -63,6 +65,10 @@ class MirrorReceiver {
   uint32_t packetsSeen_ = 0;
   uint32_t packetsRejected_ = 0;
   uint32_t framesFailed_ = 0;
+  uint8_t agentStatus_ = 0;
+  uint8_t renderedAgentStatus_ = 255;
+  bool renderedAgentVisible_ = false;
+  bool agentOverlayPainted_ = false;
 
  public:
   bool udpBound() const { return udpBound_; }

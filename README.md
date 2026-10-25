@@ -129,6 +129,15 @@ pio run
 Control 源码位于 [`companion/control`](companion/control)。它由 Go 服务、MyGo 桌面壳、
 Vite/TypeScript 前端和一个可选的 Objective-C 原生虚拟屏幕助手组成。
 
+### 下载发行版
+
+带版本号的 Control 安装包会发布在 GitHub Releases 中。macOS 提供通用架构 `.dmg`，
+Windows 提供 `.exe`（Windows runner 可用 NSIS 时还会附带安装器），Linux 提供 `.deb`
+和 `.tar.gz`，另外还有一个可部署的浏览器版本。
+Windows、Linux 和浏览器版本支持普通屏幕镜像；系统级虚拟屏幕依赖 macOS 的
+`CGVirtualDisplay`，只在 macOS Control 中提供。ESP32 固件仍需使用 PlatformIO 单独
+编译和烧录，桌面安装包不会携带 PlatformIO 或 Wi-Fi 密码。
+
 ```sh
 cd companion/control
 bun install
@@ -176,6 +185,31 @@ go build ./...
 虚拟显示器不是 Control 窗口内的预览画布，而是 macOS 的系统级显示器。Control 的原生助手
 通过 `CGDisplayStream` 取得画面，Go 将 BGRA 帧转换为 160×128 JPEG，再复用 ESP32 的
 UDP 镜像通道。创建失败时通常是 macOS 版本、权限或当前应用签名限制导致的。
+
+## Agent Status hook
+
+Control 可以读取 Codex 或 Claude 的生命周期 hook，并把两个来源的最高优先级状态发送给
+镜像中的交通灯。状态语义是：**绿灯 = 进行中**（`working`），**红灯 = 停止/结束**
+（`done` 或 `idle`），**黄灯 = 有问题，需要注意**（`question` 或 `error`）。
+
+仓库内已经包含可直接执行的 hook：
+
+```sh
+export MINI_TV_AGENT_SOURCE=codex
+export MINI_TV_AGENT_STATE=working
+companion/control/scripts/agent-status-hook.sh
+```
+
+它默认写入 `~/.config/mini-tv/agent-status.json`。如果 Control 和 hook 使用不同的 Home
+目录，可以设置 `MINI_TV_AGENT_STATUS_FILE`。要在 Codex 中安装说明 skill：
+
+```sh
+mkdir -p ~/.codex/skills/mini-tv-agent-status
+cp companion/control/skills/agent-status/SKILL.md ~/.codex/skills/mini-tv-agent-status/
+```
+
+然后把 hook 命令加入 `~/.codex/hooks.json`，在 Codex 中运行 `/hooks` 审核并信任它，再重启
+当前会话。完整发布说明和跨平台构建产物见 [`RELEASE_TEMPLATE.md`](RELEASE_TEMPLATE.md)。
 
 ## 项目使用的技术
 

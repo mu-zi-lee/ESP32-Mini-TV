@@ -22,15 +22,21 @@ void ModeManager::setMode(Mode mode) {
 }
 
 void ModeManager::next() {
-  const uint8_t nextMode = (static_cast<uint8_t>(state_.mode) + 1) % 4;
+  // The device now has two intentional user-facing pages: overview and
+  // mirror. Music/system remain accepted as legacy aliases for overview.
+  const uint8_t nextMode = state_.mode == Mode::Home ? static_cast<uint8_t>(Mode::Mirror)
+                                                     : static_cast<uint8_t>(Mode::Home);
   setMode(static_cast<Mode>(nextMode));
 }
 
 bool ModeManager::setModeByName(const char* name) {
   if (!strcmp(name, "home")) setMode(Mode::Home);
   else if (!strcmp(name, "mirror")) setMode(Mode::Mirror);
-  else if (!strcmp(name, "music")) setMode(Mode::Music);
-  else if (!strcmp(name, "dashboard") || !strcmp(name, "dash")) setMode(Mode::Dashboard);
+  else if (!strcmp(name, "music") || !strcmp(name, "dashboard") || !strcmp(name, "dash")) {
+    // Preserve compatibility with older Control builds while avoiding a
+    // duplicate page that overlaps the home overview.
+    setMode(Mode::Home);
+  }
   else if (!strcmp(name, "settings")) setMode(Mode::Settings);
   else if (!strcmp(name, "error")) setMode(Mode::Error);
   else return false;

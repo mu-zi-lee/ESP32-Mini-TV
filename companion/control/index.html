@@ -41,16 +41,31 @@
           <div><span>数据</span><strong id="health-telemetry">等待同步</strong></div>
         </div>
 
+        <section class="panel agent-panel" aria-live="polite">
+          <div class="panel-heading">
+            <div><span class="eyebrow">Agent 状态</span><h2>Codex / Claude</h2></div>
+            <span id="agent-aggregate-tag" class="status-tag">未检测</span>
+          </div>
+          <div class="agent-overview">
+            <span id="agent-aggregate-dot" class="agent-dot is-idle" aria-hidden="true"></span>
+            <div><strong id="agent-aggregate-label">没有活动</strong><small id="agent-aggregate-detail">等待 hook 事件</small></div>
+            <time id="agent-updated">--</time>
+          </div>
+          <div id="agent-list" class="agent-list">
+            <div class="agent-empty">还没有收到 Codex 或 Claude 的事件</div>
+          </div>
+          <div class="agent-debug-row"><span id="agent-file-state">状态文件未检测</span><span id="agent-event-count">0 个事件</span></div>
+          <details class="agent-events-details"><summary>最近事件</summary><div id="agent-events" class="agent-events"><div class="agent-empty">暂无事件</div></div></details>
+        </section>
+
         <div class="control-grid">
           <section class="panel mode-panel">
             <div class="panel-heading"><div><span class="eyebrow">设备画面</span><h2>现在显示</h2></div><span id="device-mode" class="status-tag">离线</span></div>
             <div class="mode-list">
               <button data-mode="home" class="mode-button"><span class="mode-icon">⌂</span><span><b>主页</b><small>时间与概览</small></span></button>
               <button data-mode="mirror" class="mode-button"><span class="mode-icon">▣</span><span><b>镜像</b><small>Mac 屏幕</small></span></button>
-              <button data-mode="music" class="mode-button"><span class="mode-icon">♪</span><span><b>音乐</b><small>正在播放</small></span></button>
-              <button data-mode="dashboard" class="mode-button"><span class="mode-icon">◫</span><span><b>系统</b><small>CPU 与内存</small></span></button>
             </div>
-            <div class="panel-footnote"><span>ESP32 只能通过 Control 切换页面</span><span id="selected-mode-note">--</span></div>
+            <div class="panel-footnote"><span>时间概览与镜像由 Control 切换</span><span id="selected-mode-note">--</span></div>
           </section>
 
           <section class="panel computer-panel">

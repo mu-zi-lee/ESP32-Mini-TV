@@ -1,0 +1,153 @@
+name: Release Control
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS Control
+    runs-on: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.x"
+
+      - name: Install frontend dependencies
+        working-directory: companion/control
+        run: bun install --frozen-lockfile
+
+      - name: Build Control packages
+        working-directory: companion/control
+        run: |
+          bunx mygo build --platform darwin/universal -o build/release --skip-notarize
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-macos
+          path: companion/control/build/release
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux Control and Web
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.x"
+
+      - name: Install frontend dependencies
+        working-directory: companion/control
+        run: bun install --frozen-lockfile
+
+      - name: Build Linux and Web packages
+        working-directory: companion/control
+        run: bunx mygo build --platform linux/amd64,web -o build/release --skip-notarize
+
+      - name: Upload Linux and Web packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-linux-web
+          path: companion/control/build/release
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows Control
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.x"
+
+      - name: Install frontend dependencies
+        working-directory: companion/control
+        run: bun install --frozen-lockfile
+
+      - name: Build Windows packages
+        working-directory: companion/control
+        shell: bash
+        run: bunx mygo build --platform windows/amd64 -o build/release --skip-notarize
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-windows
+          path: companion/control/build/release
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Download platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: control-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Package checksums
+        run: |
+          find release-assets -type f -print0 | sort -z | xargs -0 sha256sum > release-sha256.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          body_path: RELEASE_TEMPLATE.md
+          files: |
+            release-assets/**
+            release-sha256.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

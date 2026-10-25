@@ -1,4 +1,4 @@
-import { DeviceService, type DeviceStatus, type Network, type SerialPort } from "./mygo";
+import { DeviceService, type AgentStatusInfo, type AgentStatusSnapshot, type DeviceStatus, type Network, type SerialPort } from "./mygo";
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const address = $<HTMLInputElement>("#address");
@@ -25,6 +25,15 @@ const computerBattery = $("#computer-battery");
 const computerCharging = $("#computer-charging");
 const computerAudio = $("#computer-audio");
 const computerArtist = $("#computer-artist");
+const agentAggregateTag = $("#agent-aggregate-tag");
+const agentAggregateDot = $("#agent-aggregate-dot");
+const agentAggregateLabel = $("#agent-aggregate-label");
+const agentAggregateDetail = $("#agent-aggregate-detail");
+const agentUpdated = $("#agent-updated");
+const agentList = $("#agent-list");
+const agentFileState = $("#agent-file-state");
+const agentEventCount = $("#agent-event-count");
+const agentEvents = $("#agent-events");
 const syncState = $("#sync-state");
 const virtualOpen = $("#virtual-open") as HTMLButtonElement;
 const virtualMirror = $("#virtual-mirror") as HTMLButtonElement;
@@ -47,6 +56,9 @@ let virtualActive = false;
 let virtualMirroring = false;
 let autoSync = true;
 let statusRefreshInFlight = false;
+let computerRefreshInFlight = false;
+let agentRefreshInFlight = false;
+let lastAgentSnapshot: AgentStatusSnapshot | undefined;
 
 const configuredAddress = (import.meta.env.MINI_TV_DEVICE_URL ?? import.meta.env.VITE_MINI_TV_DEVICE_URL ?? "").trim();
 const savedAddress = localStorage.getItem("mini-tv.device-address")?.trim() ?? "";
@@ -58,6 +70,7 @@ if (configuredPassword) passwordInput.value = configuredPassword;
 
 address.addEventListener("change", () => localStorage.setItem("mini-tv.device-address", address.value.trim()));
 function showMessage(message: string, error = false) { statusText.textContent = message; statusText.className = error ? "notice error" : "notice"; }
+function wait(milliseconds: number): Promise<void> { return new Promise((resolve) => window.setTimeout(resolve, milliseconds)); }
 function setConnection(connected: boolean) { connectionLabel.textContent = connected ? "已连接" : "未连接"; connectionLabel.parentElement?.classList.toggle("is-live", connected); }
 function setSyncState(active: boolean) { syncState.textContent = active ? "LIVE" : "WAIT"; syncState.classList.toggle("is-live", active); }
 function renderMirrorButton() { mirrorButton.textContent = mirrorActionInFlight ? "正在处理…" : (mirroring ? "停止镜像" : "开始镜像"); mirrorButton.disabled = mirrorActionInFlight; }
@@ -71,6 +84,68 @@ function renderComputer(payload: Awaited<ReturnType<typeof DeviceService.compute
   const hasAudio = payload.track.trim().length > 0;
   computerAudio.textContent = hasAudio ? payload.track : "未播放";
   computerArtist.textContent = hasAudio ? `${payload.artist || "未知艺术家"} · ${payload.playing ? "正在播放" : "已暂停"}` : "没有检测到正在运行的播放器";
+}
+function agentLabel(state: string): string {
+  return ({ idle: "已停止", working: "进行中", question: "需要注意", done: "已结束", error: "需要注意" } as Record<string, string>)[state] ?? state;
+}
+function agentDetail(info: AgentStatusInfo): string {
+  const event = info.event || "hook event";
+  if (info.message) return `${event} · ${info.message}`;
+  return event;
+}
+function formatAgentTime(timestamp: number): string {
+  if (!timestamp) return "--";
+  return new Date(timestamp * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function renderAgent(snapshot: AgentStatusSnapshot) {
+  lastAgentSnapshot = snapshot;
+  const state = snapshot.aggregate || "idle";
+  agentAggregateTag.textContent = agentLabel(state);
+  agentAggregateTag.className = `status-tag agent-status-tag is-${state}`;
+  agentAggregateDot.className = `agent-dot is-${state}`;
+  agentAggregateLabel.textContent = agentLabel(state);
+  const source = snapshot.aggregateSource ? snapshot.aggregateSource.charAt(0).toUpperCase() + snapshot.aggregateSource.slice(1) : "";
+  agentAggregateDetail.textContent = source ? `${source} · ${state === "error" || state === "question" ? "黄灯：需要注意" : state === "working" ? "绿灯：进行中" : "红灯：已停止"}` : "等待 hook 事件";
+  agentUpdated.textContent = formatAgentTime(snapshot.updatedAt);
+  agentFileState.textContent = snapshot.available ? "状态文件已连接" : "状态文件未检测";
+  agentEventCount.textContent = `${snapshot.events.length} 个事件`;
+  const sources = Object.keys(snapshot.agents).sort();
+  agentList.replaceChildren();
+  if (!sources.length) {
+    const empty = document.createElement("div"); empty.className = "agent-empty"; empty.textContent = "还没有收到 Codex 或 Claude 的事件"; agentList.append(empty);
+  } else {
+    for (const source of sources) {
+      const info = snapshot.agents[source];
+      if (!info) continue;
+      const row = document.createElement("div"); row.className = "agent-row";
+      const dot = document.createElement("span"); dot.className = `agent-dot is-${info.state}`; dot.setAttribute("aria-hidden", "true");
+      const body = document.createElement("div"); body.className = "agent-row-body";
+      const name = document.createElement("strong"); name.textContent = source.charAt(0).toUpperCase() + source.slice(1);
+      const detail = document.createElement("small"); detail.textContent = `${agentLabel(info.state)} · ${agentDetail(info)}`;
+      body.append(name, detail);
+      const time = document.createElement("time"); time.textContent = formatAgentTime(info.updatedAt);
+      row.append(dot, body, time); agentList.append(row);
+    }
+  }
+  agentEvents.replaceChildren();
+  if (!snapshot.events.length) {
+    const empty = document.createElement("div"); empty.className = "agent-empty"; empty.textContent = "暂无事件"; agentEvents.append(empty);
+  } else {
+    for (const event of [...snapshot.events].reverse()) {
+      const row = document.createElement("div"); row.className = "agent-event-row";
+      const time = document.createElement("time"); time.textContent = formatAgentTime(event.updatedAt);
+      const source = document.createElement("strong"); source.textContent = event.source;
+      const label = document.createElement("span"); label.textContent = `${event.event || "event"} · ${agentLabel(event.state)}`;
+      row.append(time, source, label); agentEvents.append(row);
+    }
+  }
+}
+async function refreshAgentStatus() {
+  if (agentRefreshInFlight) return;
+  agentRefreshInFlight = true;
+  try { renderAgent(await DeviceService.agentStatus()); }
+  catch { if (!lastAgentSnapshot) renderAgent({ agents: {}, events: [], aggregate: "idle", updatedAt: 0, available: false }); }
+  finally { agentRefreshInFlight = false; }
 }
 function renderStatus(status: DeviceStatus) {
   setConnection(true);
@@ -95,7 +170,12 @@ function renderStatus(status: DeviceStatus) {
   if (!mirrorActionInFlight) mirroring = status.mirrorActive;
   renderMirrorButton();
 }
-async function refreshComputer() { try { renderComputer(await DeviceService.computerStatus()); } catch { computerArtist.textContent = "电脑状态读取失败"; } }
+async function refreshComputer() {
+  if (computerRefreshInFlight) return;
+  computerRefreshInFlight = true;
+  try { renderComputer(await DeviceService.computerStatus()); } catch { computerArtist.textContent = "电脑状态读取失败"; }
+  finally { computerRefreshInFlight = false; }
+}
 async function refresh(silent = false) {
   if (statusRefreshInFlight) return;
   statusRefreshInFlight = true;
@@ -105,14 +185,30 @@ async function refresh(silent = false) {
     const candidates = [configured, "http://mini-tv.local", "http://192.168.4.1"].filter((value, index, list) => value && list.indexOf(value) === index);
     let status: DeviceStatus | undefined;
     let connectedCandidate = configured;
-    for (const candidate of candidates) { try { status = await DeviceService.status(candidate); connectedCandidate = candidate; break; } catch { /* try next address */ } }
+    // ESP32 may need a few seconds after reset to associate with the saved
+    // router and register mini-tv.local. Retry the small candidate set here so
+    // a normal reboot is shown as "waiting" instead of a false hard failure.
+    for (let attempt = 0; attempt < 4 && !status; attempt++) {
+      for (const candidate of candidates) {
+        try { status = await DeviceService.status(candidate); connectedCandidate = candidate; break; } catch { /* try next address */ }
+      }
+      if (!status && attempt < 3) {
+        if (!silent) showMessage(`正在等待 ESP32 上线…（${attempt + 1}/3）`);
+        await wait(700 + attempt * 350);
+      }
+    }
     if (!status) throw new Error("无法找到 ESP32，请检查地址和 Wi‑Fi");
     if (connectedCandidate !== configured) address.value = connectedCandidate;
     renderStatus(status);
     setSyncState(status.telemetryValid);
     if (!syncing && autoSync) { try { await DeviceService.startSync(address.value); syncing = true; syncButton.textContent = "停止同步"; } catch { syncing = false; } }
     showMessage("设备已连接");
-  } catch (error) { setConnection(false); modeLabel.textContent = "离线"; modeLabel.classList.remove("is-live"); if (!silent) showMessage(error instanceof Error ? error.message : String(error), true); }
+  } catch (error) {
+    setConnection(false);
+    modeLabel.textContent = "离线";
+    modeLabel.classList.remove("is-live");
+    if (!silent) showMessage("ESP32 暂未上线，请确认 Mac 已连接同一个 Wi‑Fi；Control 会继续重试", true);
+  }
   finally { statusRefreshInFlight = false; }
 }
 async function scan() { showMessage("正在扫描附近的 Wi‑Fi…"); try { const result = await DeviceService.scanNetworks(address.value); networkSelect.innerHTML = "<option value=\"\">选择网络</option>"; result.networks.forEach((network: Network) => { const option = document.createElement("option"); option.value = network.ssid; option.textContent = `${network.ssid} · ${network.rssi} dBm`; networkSelect.append(option); }); showMessage(`扫描完成，发现 ${result.networks.length} 个网络`); } catch (error) { showMessage(error instanceof Error ? error.message : String(error), true); } }
@@ -132,4 +228,10 @@ autoSyncButton.addEventListener("click", async () => { autoSync = !autoSync; aut
 virtualOpen.addEventListener("click", () => { void (async () => { if (virtualActive) { if (virtualMirroring) { try { await DeviceService.stopVirtualMirror(address.value); } catch { /* display shutdown still proceeds */ } virtualMirroring = false; } const status = await DeviceService.stopVirtualDisplay(); virtualActive = status.active; virtualDisplayTag.textContent = "未创建"; virtualHelp.textContent = "创建系统级显示器后，可以把任意窗口拖过去。"; virtualOpen.textContent = "创建虚拟屏幕"; virtualMirror.disabled = true; showMessage("虚拟屏幕已关闭"); return; } showMessage("正在创建系统虚拟屏幕…"); try { const status = await DeviceService.startVirtualDisplay(); virtualActive = status.active; virtualDisplayTag.textContent = "在线"; virtualDisplayTag.classList.add("active"); virtualOpen.textContent = "关闭虚拟屏幕"; virtualMirror.disabled = false; virtualHelp.textContent = "系统显示器已创建，可以拖动窗口到那里。"; showMessage("虚拟屏幕已创建"); } catch (error) { showMessage(error instanceof Error ? error.message : String(error), true); } })(); });
 virtualMirror.addEventListener("click", () => { void (async () => { try { const result = virtualMirroring ? await DeviceService.stopVirtualMirror(address.value) : await DeviceService.startVirtualMirror(address.value); virtualMirroring = !virtualMirroring; virtualMirror.textContent = virtualMirroring ? "停止发送" : "发送到 ESP32"; showMessage(result.message ?? (virtualMirroring ? "虚拟屏幕正在发送" : "虚拟屏幕发送已停止")); } catch (error) { showMessage(error instanceof Error ? error.message : String(error), true); } })(); });
 $("#serial-scan").addEventListener("click", () => void scanSerialPorts()); $("#prep-scan").addEventListener("click", () => void scanSerialPorts()); serialPort.addEventListener("change", () => { flashStart.disabled = !serialPort.value; }); flashStart.addEventListener("click", () => void flash());
-setConnection(false); void DeviceService.virtualDisplayStatus().then((status) => { virtualActive = status.active; virtualDisplayTag.textContent = status.active ? "在线" : "未创建"; virtualDisplayTag.classList.toggle("active", status.active); virtualOpen.textContent = status.active ? "关闭虚拟屏幕" : "创建虚拟屏幕"; virtualMirror.disabled = !status.active; }).catch(() => undefined); window.setInterval(() => { void refreshComputer(); }, 1500); window.setInterval(() => { void refresh(true); }, 2500); window.setTimeout(() => { void refresh(); void refreshComputer(); }, 250);
+setConnection(false); void DeviceService.virtualDisplayStatus().then((status) => { virtualActive = status.active; virtualDisplayTag.textContent = status.active ? "在线" : "未创建"; virtualDisplayTag.classList.toggle("active", status.active); virtualOpen.textContent = status.active ? "关闭虚拟屏幕" : "创建虚拟屏幕"; virtualMirror.disabled = !status.active; }).catch(() => undefined);
+// Computer telemetry is intentionally human-scale. The backend also caches
+// samples so sync and the dashboard never launch duplicate system probes.
+window.setInterval(() => { void refreshComputer(); }, 3000);
+window.setInterval(() => { void refresh(true); }, 5000);
+window.setInterval(() => { void refreshAgentStatus(); }, 500);
+window.setTimeout(() => { void refresh(); void refreshComputer(); void refreshAgentStatus(); }, 250);

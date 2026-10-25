@@ -4,6 +4,33 @@ import { call } from "mygo-runtime";
 
 // ---- Types ----
 
+export interface AgentStatusEventInfo {
+  state: string;
+  source: string;
+  sessionId?: string;
+  event?: string;
+  message?: string;
+  updatedAt: number;
+}
+
+export interface AgentStatusInfo {
+  state: string;
+  source: string;
+  sessionId?: string;
+  event?: string;
+  message?: string;
+  updatedAt: number;
+}
+
+export interface AgentStatusSnapshot {
+  agents: Record<string, AgentStatusInfo>;
+  events: AgentStatusEventInfo[];
+  aggregate: string;
+  aggregateSource?: string;
+  updatedAt: number;
+  available: boolean;
+}
+
 export interface DeviceStatus {
   ok: boolean;
   mode: string;
@@ -71,6 +98,14 @@ export interface VirtualDisplayStatus {
 // ---- Services ----
 
 export const DeviceService = {
+  /**
+   * AgentStatus reads the shared Codex/Claude hook snapshot without touching the
+   * device. It is intentionally local so the Control window can debug the hook,
+   * UDP publisher, and ESP32 independently.
+   */
+  agentStatus(): Promise<AgentStatusSnapshot> {
+    return call("DeviceService.AgentStatus");
+  },
   /**
    * ComputerStatus reads the current Mac state for the control surface. It only
    * inspects already-running processes and never launches a media application.

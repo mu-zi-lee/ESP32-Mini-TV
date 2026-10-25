@@ -16,6 +16,11 @@ constexpr uint16_t kTileChunkPayload = 1182;
 constexpr uint8_t kModeJpeg = 0;
 constexpr uint8_t kModeTile = 1;
 constexpr uint8_t kModeRawRgb565 = 2;
+constexpr uint8_t kModeAgentStatus = 3;
+constexpr int16_t kAgentOverlayLeft = 3;
+constexpr int16_t kAgentOverlayTop = 111;
+constexpr int16_t kAgentOverlayRight = 46;
+constexpr int16_t kAgentOverlayBottom = 128;
 // A frame may contain many UDP chunks and the Mac can occasionally spend
 // longer than one capture interval encoding it. Keep the last good image on
 // screen during that short gap instead of flashing NO SIGNAL.
@@ -25,6 +30,10 @@ constexpr uint8_t kModeRawRgb565 = 2;
 constexpr uint32_t kFrameTimeoutMs = 5000;
 Display* activeDisplay = nullptr;
 uint8_t* activeTileCanvas = nullptr;
+// Full-frame decodes must leave the already-painted status overlay alone.
+// Without this guard, every mirror frame briefly paints desktop pixels over
+// the traffic lights before renderAgentStatus() paints them back.
+bool preserveAgentOverlay = false;
 
 uint16_t readU16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
 uint32_t frameHash(const uint8_t* data, size_t length) {
@@ -53,7 +62,45 @@ bool drawJpeg(int16_t x, int16_t y, uint16_t width, uint16_t height, uint16_t* b
 	  return true;
  }
   if (!activeDisplay || y >= activeDisplay->canvas().height()) return false;
-  activeDisplay->canvas().drawRGBBitmap(x, y, bitmap, width, height);
+  if (!preserveAgentOverlay || x + width <= kAgentOverlayLeft || x >= kAgentOverlayRight ||
+      y + height <= kAgentOverlayTop || y >= kAgentOverlayBottom) {
+    activeDisplay->canvas().drawRGBBitmap(x, y, bitmap, width, height);
+    return true;
+  }
+  // TJpg_Decoder normally gives us a complete scanline-sized block. Keep the
+  // overlay rectangle untouched, while still drawing the pixels on either
+  // side of it in the same callback. Use at most two bitmap writes per row;
+  // drawing one TFT pixel at a time would reintroduce visible tearing.
+  for (uint16_t row = 0; row < height; ++row) {
+    const int16_t py = y + static_cast<int16_t>(row);
+    if (py < 0 || py >= activeDisplay->canvas().height()) continue;
+    const int16_t rowLeft = max<int16_t>(x, 0);
+    const int16_t rowRight = min<int16_t>(x + width, activeDisplay->canvas().width());
+    if (py < kAgentOverlayTop) {
+      if (rowLeft < rowRight) {
+        const uint16_t sourceOffset = static_cast<uint16_t>(rowLeft - x);
+        // TJpg_Decoder gives us a block, not one independent bitmap per
+        // scanline. Include the current row when slicing around the overlay;
+        // omitting it repeats the first row across the lower-left edge and
+        // makes the mirror look smeared whenever the dots are enabled.
+        activeDisplay->canvas().drawRGBBitmap(rowLeft, py, bitmap + row * width + sourceOffset,
+                                              static_cast<uint16_t>(rowRight - rowLeft), 1);
+      }
+      continue;
+    }
+    const int16_t leftEnd = min<int16_t>(kAgentOverlayLeft, rowRight);
+    if (rowLeft < leftEnd) {
+      const uint16_t sourceOffset = static_cast<uint16_t>(rowLeft - x);
+      activeDisplay->canvas().drawRGBBitmap(rowLeft, py, bitmap + row * width + sourceOffset,
+                                            static_cast<uint16_t>(leftEnd - rowLeft), 1);
+    }
+    const int16_t rightStart = max<int16_t>(kAgentOverlayRight, rowLeft);
+    if (rightStart < rowRight) {
+      const uint16_t sourceOffset = static_cast<uint16_t>(rightStart - x);
+      activeDisplay->canvas().drawRGBBitmap(rightStart, py, bitmap + row * width + sourceOffset,
+                                            static_cast<uint16_t>(rowRight - rightStart), 1);
+    }
+  }
   return true;
 }
 }  // namespace
@@ -75,6 +122,11 @@ void MirrorReceiver::begin() {
   activeTileCanvas = nullptr;
   tileBatchNeedsKeyframe_ = false;
   tileBatchAccepted_ = true;
+  agentStatus_ = 0;
+  renderedAgentStatus_ = 255;
+  renderedAgentVisible_ = false;
+  agentOverlayPainted_ = false;
+  preserveAgentOverlay = false;
   haveRenderedHash_ = false;
   renderedHash_ = 0;
   tileBatchNeedsKeyframe_ = false;
@@ -88,6 +140,11 @@ void MirrorReceiver::stop() {
   haveRenderedHash_ = false;
   renderedHash_ = 0;
   modes_.setMirrorActive(false);
+  agentStatus_ = 0;
+  renderedAgentStatus_ = 255;
+  renderedAgentVisible_ = false;
+  agentOverlayPainted_ = false;
+  preserveAgentOverlay = false;
 }
 
 void MirrorReceiver::handle() {
@@ -138,6 +195,11 @@ void MirrorReceiver::handle() {
 bool MirrorReceiver::acceptPacket(const uint8_t* packet, size_t length) {
   if (length < kHeaderSize || packet[0] != kMagic0 || packet[1] != kMagic1 || packet[2] != kVersion) return false;
   const uint8_t mode = packet[13];
+  if (mode == kModeAgentStatus) {
+    if (length != 15 || packet[14] > 4) return false;
+    setAgentStatus(packet[14]);
+    return true;
+  }
   if (mode > kModeRawRgb565) return false;
   const size_t headerSize = mode == kModeTile ? kTileHeaderSize : kHeaderSize;
   if (length < headerSize) return false;
@@ -252,6 +314,49 @@ bool MirrorReceiver::acceptPacket(const uint8_t* packet, size_t length) {
   return true;
 }
 
+void MirrorReceiver::setAgentStatus(uint8_t status) {
+  if (agentStatus_ == status && renderedAgentStatus_ == status && agentOverlayPainted_) return;
+  agentStatus_ = status;
+  renderAgentStatus(true);
+}
+
+void MirrorReceiver::renderAgentStatus(bool force) {
+  if (!modes_.state().mirrorActive && !active_) return;
+  // Three small traffic-light dots in the lower-left corner. The translucent
+  // effect is approximated with a dark halo so the overlay remains legible on
+  // both bright and dark mirrored content.
+  auto& tft = display_.canvas();
+  const int16_t x = 8;
+  const int16_t y = 118;
+  const uint16_t dark = 0x18E3;
+  const uint16_t red = 0xF800;
+  const uint16_t yellow = 0xFFE0;
+  const uint16_t green = 0x07E0;
+  const uint16_t off = 0x632C;
+  // Traffic-light semantics: red means stopped/finished, green means in
+  // progress, and yellow means attention is needed (error or input).
+  const bool visible = true;
+  const bool redOn = agentStatus_ == 0 || agentStatus_ == 2;
+  const bool yellowOn = agentStatus_ == 3 || agentStatus_ == 4;
+  if (!force && agentOverlayPainted_ && renderedAgentStatus_ == agentStatus_ &&
+      renderedAgentVisible_ == visible) return;
+  // The desktop pixels under the overlay are protected while mirroring. Only
+  // paint the halo when the overlay first appears or the state changes; a
+  // question blink then updates three circles in place instead of repainting
+  // the whole rectangle every 350 ms.
+  if (!agentOverlayPainted_ || renderedAgentStatus_ != agentStatus_) {
+    tft.fillRoundRect(kAgentOverlayLeft, kAgentOverlayTop,
+                      kAgentOverlayRight - kAgentOverlayLeft,
+                      kAgentOverlayBottom - kAgentOverlayTop, 7, dark);
+  }
+  tft.fillCircle(x, y, 4, redOn && visible ? red : off);
+  tft.fillCircle(x + 13, y, 4, yellowOn && visible ? yellow : off);
+  tft.fillCircle(x + 26, y, 4, agentStatus_ == 1 ? green : off);
+  renderedAgentStatus_ = agentStatus_;
+  renderedAgentVisible_ = visible;
+  agentOverlayPainted_ = true;
+}
+
 bool MirrorReceiver::finishFrame() {
   if (frameLength_ == 0) return false;
   if (!modes_.state().mirrorActive) {
@@ -261,10 +366,24 @@ bool MirrorReceiver::finishFrame() {
     return true;
   }
   if (packetMode_ == kModeRawRgb565) {
+    const bool protectOverlay = preserveAgentOverlay && agentOverlayPainted_;
+    if (!protectOverlay) agentOverlayPainted_ = false;
     display_.canvas().startWrite();
-    display_.canvas().setAddrWindow(0, 0, 160, 128);
-    display_.canvas().writePixels(reinterpret_cast<uint16_t*>(buffers_.rawFrame), 160 * 128, true, true);
+    for (int16_t y = 0; y < 128; ++y) {
+      uint16_t* row = reinterpret_cast<uint16_t*>(buffers_.rawFrame) + y * 160;
+      if (protectOverlay && y >= kAgentOverlayTop) {
+        display_.canvas().setAddrWindow(0, y, kAgentOverlayLeft, 1);
+        display_.canvas().writePixels(row, kAgentOverlayLeft, true, true);
+        display_.canvas().setAddrWindow(kAgentOverlayRight, y, 160 - kAgentOverlayRight, 1);
+        display_.canvas().writePixels(row + kAgentOverlayRight, 160 - kAgentOverlayRight, true, true);
+      } else {
+        display_.canvas().setAddrWindow(0, y, 160, 1);
+        display_.canvas().writePixels(row, 160, true, true);
+      }
+    }
     display_.canvas().endWrite();
+    renderAgentStatus(!agentOverlayPainted_);
+    preserveAgentOverlay = true;
     modes_.recordMirrorFrame();
     receivedChunks_ = 0;
     receivedBitmap_ = 0;
@@ -276,6 +395,9 @@ bool MirrorReceiver::finishFrame() {
   // desktop is idle. Do not pay the ~60 ms decode + full SPI flush cost again
   // when the pixels cannot have changed.
   if (!haveRenderedHash_ || hash != renderedHash_) {
+    const bool protectOverlay = preserveAgentOverlay && agentOverlayPainted_;
+    if (!protectOverlay) agentOverlayPainted_ = false;
+    preserveAgentOverlay = protectOverlay;
     const JRESULT result = TJpgDec.drawJpg(0, 0, buffers_.frame, frameLength_);
     if (result != JDR_OK) {
       framesFailed_++;
@@ -285,6 +407,8 @@ bool MirrorReceiver::finishFrame() {
     renderedHash_ = hash;
     haveRenderedHash_ = true;
   }
+  renderAgentStatus(!agentOverlayPainted_);
+  preserveAgentOverlay = true;
   modes_.recordMirrorFrame();
   receivedChunks_ = 0;
   receivedBitmap_ = 0;
@@ -319,6 +443,8 @@ bool MirrorReceiver::finishTile() {
   receivedBitmap_ = 0;
   frameLength_ = 0;
   if (tileBatchCount_ > 0 && receivedTileBitmap_ == ((1UL << tileBatchCount_) - 1)) {
+    const bool protectOverlay = preserveAgentOverlay && agentOverlayPainted_;
+    if (!protectOverlay) agentOverlayPainted_ = false;
     display_.canvas().startWrite();
     uint16_t row[160];
     // The network is sparse, but the panel commit is deliberately contiguous:
@@ -337,9 +463,18 @@ bool MirrorReceiver::finishTile() {
         const uint16_t b565 = static_cast<uint16_t>((blue * 31 + 1) / 3);
         row[x] = static_cast<uint16_t>((r565 << 11) | (g565 << 5) | b565);
       }
-      display_.canvas().writePixels(row, 160, true, true);
+      if (protectOverlay && y >= kAgentOverlayTop) {
+        display_.canvas().setAddrWindow(0, y, kAgentOverlayLeft, 1);
+        display_.canvas().writePixels(row, kAgentOverlayLeft, true, true);
+        display_.canvas().setAddrWindow(kAgentOverlayRight, y, 160 - kAgentOverlayRight, 1);
+        display_.canvas().writePixels(row + kAgentOverlayRight, 160 - kAgentOverlayRight, true, true);
+      } else {
+        display_.canvas().writePixels(row, 160, true, true);
+      }
     }
     display_.canvas().endWrite();
+    renderAgentStatus(!agentOverlayPainted_);
+    preserveAgentOverlay = true;
     modes_.recordMirrorFrame();
     receivedTileBitmap_ = 0;
     tileBatchCount_ = 0;

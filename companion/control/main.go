@@ -256,6 +256,18 @@ func (d DeviceService) ComputerStatus() TelemetryPayload {
 	return telemetryPayload(collectTelemetry(ctx))
 }
 
+// AgentStatus reads the shared Codex/Claude hook snapshot without touching the
+// device. It is intentionally local so the Control window can debug the hook,
+// UDP publisher, and ESP32 independently.
+func (DeviceService) AgentStatus() AgentStatusSnapshot {
+	snapshot, err := readAgentStatusSnapshot(defaultAgentStatusPath())
+	if err != nil {
+		snapshot.Available = false
+		snapshot.Aggregate = "idle"
+	}
+	return snapshot
+}
+
 func (d DeviceService) setMirror(address string, active bool) error {
 	var result Result
 	return d.call(address, "/api/mirror", http.MethodPost, map[string]bool{"active": active}, &result)

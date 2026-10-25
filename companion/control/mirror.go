@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -41,10 +42,9 @@ const (
 	// the ESP32. Keep a small, shared pacing interval for every capture source;
 	// without this guard a live FFmpeg pipe can flood UDP while the panel is
 	// still drawing the previous frame.
-	// Experimental high-refresh profile: at most about 33 submitted frames/s.
-	// The receiver still keeps only the newest complete frame, so if the
-	// ESP32 cannot decode this quickly the sender drops stale work instead of
-	// building latency.
+	// Keep the original high-refresh mirror profile. Resource reductions are
+	// handled by telemetry deduplication and request pacing, not by dropping
+	// frames from the live mirror stream.
 	mirrorInterval          = 30 * time.Millisecond
 	mirrorHeartbeatInterval = 900 * time.Millisecond
 	mirrorKeyframeInterval  = 3 * time.Second
@@ -53,6 +53,9 @@ const (
 	// TJpg_Decoder runs synchronously on the ESP32. Leave a small gap between
 	// tiles so a 20-tile keyframe does not overflow the UDP receive queue.
 	mirrorTileInterval = 8 * time.Millisecond
+	// Status packets use the same UDP socket as frames, but a distinct magic
+	// byte so the ESP32 can update its overlay without touching the framebuffer.
+	agentStatusPacketMode = 3
 )
 
 // Raw RGB565 avoids JPEG decode cost on the ESP32, but it sends a fixed 41KB
@@ -90,16 +93,37 @@ type screenCaptureStream struct {
 
 func startScreenCapture(ctx context.Context) (*screenCaptureStream, error) {
 	index := strings.TrimSpace(os.Getenv("MINI_TV_SCREEN_INDEX"))
-	if index == "" {
-		// AVFoundation device order varies with connected cameras and displays.
-		// Override this with MINI_TV_SCREEN_INDEX when the second display is used.
-		index = "3"
+	args := []string{"-hide_banner", "-loglevel", "error"}
+	switch runtime.GOOS {
+	case "darwin":
+		if index == "" {
+			// AVFoundation device order varies with connected cameras and displays.
+			// Override this with MINI_TV_SCREEN_INDEX when the second display is used.
+			index = "3"
+		}
+		args = append(args, "-f", "avfoundation", "-framerate", "40", "-pixel_format", "uyvy422", "-i", index+":none")
+	case "linux":
+		display := strings.TrimSpace(os.Getenv("DISPLAY"))
+		if display == "" {
+			return nil, fmt.Errorf("找不到 Linux 图形会话，请设置 DISPLAY")
+		}
+		input := display
+		if index != "" {
+			input += "+" + index
+		}
+		args = append(args, "-f", "x11grab", "-framerate", "30", "-i", input)
+	case "windows":
+		if index == "" {
+			index = "desktop"
+		}
+		args = append(args, "-f", "gdigrab", "-framerate", "30", "-i", index)
+	default:
+		return nil, fmt.Errorf("当前系统不支持屏幕采集：%s", runtime.GOOS)
 	}
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error",
-		"-f", "avfoundation", "-framerate", "40", "-pixel_format", "uyvy422",
-		"-i", index+":none",
+	args = append(args,
 		"-vf", "scale=160:128:force_original_aspect_ratio=increase,crop=160:128",
 		"-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1")
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -500,6 +524,33 @@ func sendFrame(conn *net.UDPConn, address *net.UDPAddr, frameID uint16, jpegData
 	return nil
 }
 
+func sendAgentStatus(conn *net.UDPConn, address *net.UDPAddr, status agentStatus) error {
+	packet := []byte{'M', 'T', 1, 0, 0, mirrorWidth, mirrorHeight, 0, 0, 1, 0, 1, 0, agentStatusPacketMode, byte(status)}
+	_, err := conn.WriteToUDP(packet, address)
+	return err
+}
+
+func startAgentStatusPublisher(ctx context.Context, conn *net.UDPConn, address *net.UDPAddr) {
+	go func() {
+		tracker := newAgentStatusTracker()
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			status, changed := tracker.poll(time.Now())
+			if changed {
+				if err := sendAgentStatus(conn, address, status); err != nil {
+					return
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func sendRawFrame(conn *net.UDPConn, address *net.UDPAddr, frameID uint16,
 	raw []byte, packet []byte) error {
 	if len(raw) != mirrorWidth*mirrorHeight*2 {
@@ -628,6 +679,7 @@ func mirrorLoop(ctx context.Context, deviceAddress string) error {
 	lastSentAt := time.Now()
 	lastHeartbeatAt := lastSentAt
 	lastCaptureAt := time.Now()
+	startAgentStatusPublisher(ctx, conn, address)
 	for {
 		if stream == nil {
 			if err := waitMirrorInterval(ctx, lastCaptureAt); err != nil {

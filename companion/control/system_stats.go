@@ -38,18 +38,22 @@ func shortAppleScript(ctx context.Context, script string) (string, error) {
 }
 
 func readCPU(ctx context.Context) int {
-	out, err := commandOutput(ctx, "top", "-l", "1", "-n", "0")
+	// `top -l 1` takes roughly two seconds on macOS and can consume a full
+	// core while it samples every process. `ps` exposes the same per-process
+	// CPU values with a much smaller and faster snapshot, which is sufficient
+	// for the coarse dashboard metric.
+	out, err := commandOutput(ctx, "ps", "-A", "-o", "%cpu=")
 	if err != nil {
 		return 0
 	}
-	re := regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?)% user,\s*([0-9]+(?:\.[0-9]+)?)% sys`)
-	match := re.FindStringSubmatch(out)
-	if len(match) != 3 {
-		return 0
+	var total float64
+	for _, line := range strings.Fields(out) {
+		value, parseErr := strconv.ParseFloat(line, 64)
+		if parseErr == nil {
+			total += value
+		}
 	}
-	user, _ := strconv.ParseFloat(match[1], 64)
-	sys, _ := strconv.ParseFloat(match[2], 64)
-	return clampPercent(int(user + sys))
+	return clampPercent(int(total))
 }
 
 func readMemory(ctx context.Context) int {
@@ -182,7 +186,7 @@ end tell`
 	return "", "", false, 0, 0
 }
 
-func collectTelemetry(ctx context.Context) ComputerTelemetry {
+func collectTelemetryFresh(ctx context.Context) ComputerTelemetry {
 	var result ComputerTelemetry
 	var group sync.WaitGroup
 	group.Add(4)
@@ -195,6 +199,54 @@ func collectTelemetry(ctx context.Context) ComputerTelemetry {
 	}()
 	group.Wait()
 	return result
+}
+
+// Telemetry is requested by both the visible dashboard and the background
+// device sync loop. Keep one short-lived sample and let concurrent callers
+// share the same work instead of spawning multiple `ps`, `vm_stat` and
+// AppleScript processes at once.
+var telemetryCache = struct {
+	sync.Mutex
+	value     ComputerTelemetry
+	fetchedAt time.Time
+	inFlight  bool
+	done      chan struct{}
+}{}
+
+const telemetryCacheTTL = 2 * time.Second
+
+func collectTelemetry(ctx context.Context) ComputerTelemetry {
+	for {
+		telemetryCache.Lock()
+		if !telemetryCache.fetchedAt.IsZero() && time.Since(telemetryCache.fetchedAt) < telemetryCacheTTL {
+			value := telemetryCache.value
+			telemetryCache.Unlock()
+			return value
+		}
+		if telemetryCache.inFlight {
+			done := telemetryCache.done
+			telemetryCache.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ComputerTelemetry{}
+			}
+		}
+		telemetryCache.inFlight = true
+		telemetryCache.done = make(chan struct{})
+		done := telemetryCache.done
+		telemetryCache.Unlock()
+
+		value := collectTelemetryFresh(ctx)
+		telemetryCache.Lock()
+		telemetryCache.value = value
+		telemetryCache.fetchedAt = time.Now()
+		telemetryCache.inFlight = false
+		close(done)
+		telemetryCache.Unlock()
+		return value
+	}
 }
 
 func clampPercent(value int) int {
